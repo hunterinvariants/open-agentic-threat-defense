@@ -11,18 +11,19 @@ import (
 )
 
 type Store struct {
-	mu            sync.RWMutex
-	db            *sql.DB
-	mode          string
-	events        []domain.Event
-	alerts        []domain.Alert
-	actions       []domain.ResponseAction
-	audits        []domain.AuditEvent
-	assets        map[string]domain.Asset
-	fingerprints  map[string]struct{}
-	path          string
-	lastErr       string
-	schemaVersion int
+	mu              sync.RWMutex
+	db              *sql.DB
+	mode            string
+	events          []domain.Event
+	alerts          []domain.Alert
+	actions         []domain.ResponseAction
+	audits          []domain.AuditEvent
+	assets          map[string]domain.Asset
+	fingerprints    map[string]struct{}
+	path            string
+	lastErr         string
+	schemaVersion   int
+	retentionWindow time.Duration
 }
 
 func New() *Store {
@@ -33,6 +34,24 @@ func New() *Store {
 	}
 }
 
+func (s *Store) SetRetention(window time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if window < 0 {
+		window = 0
+	}
+	s.retentionWindow = window
+	if window == 0 {
+		return nil
+	}
+	if err := s.enforceRetentionLocked(); err != nil {
+		s.lastErr = err.Error()
+		return err
+	}
+	return s.persistLocked()
+}
+
 func (s *Store) AddEvent(event domain.Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -40,6 +59,10 @@ func (s *Store) AddEvent(event domain.Event) error {
 	s.events = append(s.events, event)
 	s.upsertAssetLocked(event)
 	if err := s.persistEventLocked(event); err != nil {
+		s.lastErr = err.Error()
+		return err
+	}
+	if err := s.enforceRetentionLocked(); err != nil {
 		s.lastErr = err.Error()
 		return err
 	}
@@ -81,6 +104,10 @@ func (s *Store) AddAlerts(alerts []domain.Alert) ([]domain.Alert, error) {
 		s.lastErr = err.Error()
 		return nil, err
 	}
+	if err := s.enforceRetentionLocked(); err != nil {
+		s.lastErr = err.Error()
+		return nil, err
+	}
 	return added, s.persistLocked()
 }
 
@@ -114,6 +141,10 @@ func (s *Store) AddActions(actions []domain.ResponseAction) error {
 
 	s.actions = append(s.actions, actions...)
 	if err := s.persistActionsLocked(actions); err != nil {
+		s.lastErr = err.Error()
+		return err
+	}
+	if err := s.enforceRetentionLocked(); err != nil {
 		s.lastErr = err.Error()
 		return err
 	}
@@ -187,6 +218,10 @@ func (s *Store) AddAudit(event domain.AuditEvent) error {
 		s.lastErr = err.Error()
 		return err
 	}
+	if err := s.enforceRetentionLocked(); err != nil {
+		s.lastErr = err.Error()
+		return err
+	}
 	return s.persistLocked()
 }
 
@@ -244,7 +279,7 @@ func (s *Store) LastPersistenceError() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.lastErr
+	return redactPersistenceError(s.lastErr)
 }
 
 func (s *Store) Ping(ctx context.Context) error {

@@ -30,6 +30,9 @@ func TestPostgresPersistenceIntegration(t *testing.T) {
 	if s.SchemaVersion() < 1 {
 		t.Fatalf("expected postgres schema version, got %d", s.SchemaVersion())
 	}
+	if got := s.db.Stats().MaxOpenConnections; got != 10 {
+		t.Fatalf("expected postgres pool max open conns 10, got %d", got)
+	}
 
 	event := domain.Event{
 		ID:        eventID,

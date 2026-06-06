@@ -180,3 +180,47 @@ func TestStoreApprovesAction(t *testing.T) {
 		t.Fatalf("unexpected approved action: %#v", approved)
 	}
 }
+
+func TestStoreAppliesRetentionWindow(t *testing.T) {
+	s := New()
+	oldEvent := domain.Event{
+		ID:        "evt-old",
+		Timestamp: time.Now().UTC().Add(-2 * time.Hour),
+		Kind:      domain.EventFinding,
+		AssetID:   "asset-1",
+		Hostname:  "asset-1",
+	}
+	newEvent := domain.Event{
+		ID:        "evt-new",
+		Timestamp: time.Now().UTC(),
+		Kind:      domain.EventFinding,
+		AssetID:   "asset-1",
+		Hostname:  "asset-1",
+	}
+	if err := s.AddEvent(oldEvent); err != nil {
+		t.Fatalf("add old event: %v", err)
+	}
+	if err := s.AddEvent(newEvent); err != nil {
+		t.Fatalf("add new event: %v", err)
+	}
+	if err := s.SetRetention(30 * time.Minute); err != nil {
+		t.Fatalf("set retention: %v", err)
+	}
+	events := s.ListEvents()
+	if len(events) != 1 || events[0].ID != "evt-new" {
+		t.Fatalf("expected only retained event, got %#v", events)
+	}
+	eventsCount, _, assetsCount, _, _ := s.Counts()
+	if eventsCount != 1 || assetsCount != 1 {
+		t.Fatalf("unexpected counts after retention: events=%d assets=%d", eventsCount, assetsCount)
+	}
+}
+
+func TestLastPersistenceErrorIsRedacted(t *testing.T) {
+	s := New()
+	s.lastErr = "open /etc/passwd: permission denied"
+	got := s.LastPersistenceError()
+	if got == "" || got == s.lastErr {
+		t.Fatalf("expected redacted persistence error, got %q", got)
+	}
+}

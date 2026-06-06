@@ -12,11 +12,13 @@ import (
 )
 
 const (
-	RoleViewer   = "viewer"
-	RoleIngestor = "ingestor"
-	RoleAnalyst  = "analyst"
-	RoleOperator = "operator"
-	RoleAdmin    = "admin"
+	RoleViewer      = "viewer"
+	RoleIngestor    = "ingestor"
+	RoleAnalyst     = "analyst"
+	RoleOperator    = "operator"
+	RoleAdmin       = "admin"
+	loginBackoffCap = 1 * time.Minute
+	loginAttemptTTL  = 24 * time.Hour
 )
 
 type UserConfig struct {
@@ -41,12 +43,21 @@ type Authenticator struct {
 	sessionMu  sync.RWMutex
 	sessions   map[string]SessionInfo
 	sessionTTL time.Duration
+	loginMu    sync.Mutex
+	logins     map[string]loginAttempt
+}
+
+type loginAttempt struct {
+	Failures     int
+	BlockedUntil time.Time
+	LastSeen     time.Time
 }
 
 func New(users []UserConfig, legacyToken string) *Authenticator {
 	authenticator := &Authenticator{
 		users:      normalizeUsers(users),
 		sessions:   make(map[string]SessionInfo),
+		logins:     make(map[string]loginAttempt),
 		sessionTTL: 12 * time.Hour,
 	}
 	if legacyToken != "" {
@@ -66,6 +77,58 @@ func (a *Authenticator) Enabled() bool {
 
 func (a *Authenticator) HasUsers() bool {
 	return len(a.users) > 0
+}
+
+func (a *Authenticator) LoginRetryAfter(key string) time.Duration {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return 0
+	}
+
+	now := time.Now().UTC()
+	a.loginMu.Lock()
+	defer a.loginMu.Unlock()
+
+	a.pruneLoginAttemptsLocked(now)
+	attempt, ok := a.logins[key]
+	if !ok || attempt.BlockedUntil.IsZero() || !now.Before(attempt.BlockedUntil) {
+		return 0
+	}
+	return time.Until(attempt.BlockedUntil)
+}
+
+func (a *Authenticator) RecordLoginAttempt(key string, success bool) time.Duration {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return 0
+	}
+
+	now := time.Now().UTC()
+	a.loginMu.Lock()
+	defer a.loginMu.Unlock()
+
+	a.pruneLoginAttemptsLocked(now)
+	if success {
+		delete(a.logins, key)
+		return 0
+	}
+
+	attempt := a.logins[key]
+	if attempt.Failures < 0 {
+		attempt.Failures = 0
+	}
+	attempt.Failures++
+	if attempt.Failures > 8 {
+		attempt.Failures = 8
+	}
+	delay := time.Second << (attempt.Failures - 1)
+	if delay > loginBackoffCap {
+		delay = loginBackoffCap
+	}
+	attempt.BlockedUntil = now.Add(delay)
+	attempt.LastSeen = now
+	a.logins[key] = attempt
+	return delay
 }
 
 func (a *Authenticator) Authenticate(r *http.Request) (Principal, bool) {
@@ -275,6 +338,17 @@ func (a *Authenticator) authenticateSession(r *http.Request) (Principal, bool) {
 		return Principal{}, false
 	}
 	return info.Principal, true
+}
+
+func (a *Authenticator) pruneLoginAttemptsLocked(now time.Time) {
+	for key, attempt := range a.logins {
+		if attempt.LastSeen.IsZero() {
+			attempt.LastSeen = attempt.BlockedUntil
+		}
+		if !attempt.LastSeen.IsZero() && now.Sub(attempt.LastSeen) > loginAttemptTTL {
+			delete(a.logins, key)
+		}
+	}
 }
 
 func randomSessionID() string {

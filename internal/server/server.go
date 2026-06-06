@@ -32,6 +32,7 @@ type App struct {
 	responder       *response.Planner
 	webDir          string
 	auth            *auth.Authenticator
+	trustedProxies  []*net.IPNet
 	webhook         exporter.Webhook
 	ticketWebhook   exporter.Webhook
 	responseWebhook exporter.Webhook
@@ -62,6 +63,8 @@ type Options struct {
 	GitHubToken          string
 	GitHubWorkflowFile   string
 	GitHubWorkflowRef    string
+	TrustedProxies       []string
+	RetentionWindow      time.Duration
 }
 
 func New(webDir string) *App {
@@ -89,13 +92,24 @@ func NewWithOptions(options Options) (*App, error) {
 	if options.CorrelationWindow == 0 {
 		options.CorrelationWindow = 30 * time.Minute
 	}
+	if options.RetentionWindow < 0 {
+		options.RetentionWindow = 0
+	}
+	trustedProxies, err := parseTrustedProxies(options.TrustedProxies)
+	if err != nil {
+		return nil, err
+	}
+	if err := st.SetRetention(options.RetentionWindow); err != nil {
+		return nil, err
+	}
 	return &App{
-		store:      st,
-		policy:     policy.New(options.Policy),
-		correlator: correlator.New(options.CorrelationWindow),
-		responder:  response.NewDryRun(),
-		webDir:     options.WebDir,
-		auth:       auth.New(options.Users, options.APIToken),
+		store:          st,
+		policy:         policy.New(options.Policy),
+		correlator:     correlator.New(options.CorrelationWindow),
+		responder:      response.NewDryRun(),
+		webDir:         options.WebDir,
+		auth:           auth.New(options.Users, options.APIToken),
+		trustedProxies: trustedProxies,
 		webhook: exporter.Webhook{
 			URL:   options.AlertWebhookURL,
 			Token: options.AlertWebhookToken,
@@ -253,14 +267,27 @@ func (a *App) handleSession(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
+		loginKey := a.sourceIP(r)
+		if wait := a.auth.LoginRetryAfter(loginKey); wait > 0 {
+			w.Header().Set("Retry-After", fmt.Sprintf("%.0f", wait.Seconds()))
+			a.recordAudit(r, auth.Principal{Name: "anonymous"}, "auth.login", "session", "", "rate_limited", map[string]string{
+				"username":    strings.TrimSpace(req.Username),
+				"retry_after": fmt.Sprintf("%.0f", wait.Seconds()),
+			})
+			writeError(w, http.StatusTooManyRequests, errors.New("login temporarily rate limited"))
+			return
+		}
 		info, sessionID, ok := a.auth.Login(req.Username, req.Token)
 		if !ok {
+			wait := a.auth.RecordLoginAttempt(loginKey, false)
 			a.recordAudit(r, auth.Principal{Name: "anonymous"}, "auth.login", "session", "", "denied", map[string]string{
-				"username": strings.TrimSpace(req.Username),
+				"username":    strings.TrimSpace(req.Username),
+				"retry_after": fmt.Sprintf("%.0f", wait.Seconds()),
 			})
 			writeError(w, http.StatusUnauthorized, errors.New("invalid credentials"))
 			return
 		}
+		a.auth.RecordLoginAttempt(loginKey, true)
 		a.auth.SetSessionCookie(w, sessionID, info.ExpiresAt, r.TLS != nil)
 		a.recordAudit(r, info.Principal, "auth.login", "session", "", "accepted", map[string]string{
 			"mode": "session",
@@ -654,7 +681,7 @@ func (a *App) recordAudit(r *http.Request, principal auth.Principal, action stri
 		ResourceType: resourceType,
 		ResourceID:   resourceID,
 		Outcome:      outcome,
-		SourceIP:     sourceIP(r),
+		SourceIP:     a.sourceIP(r),
 		UserAgent:    r.UserAgent(),
 		Metadata:     metadata,
 	}
@@ -742,6 +769,7 @@ func methodNotAllowed(w http.ResponseWriter) {
 
 func withSecurityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
@@ -794,8 +822,8 @@ func principalFromRequest(r *http.Request) auth.Principal {
 	return principal
 }
 
-func sourceIP(r *http.Request) string {
-	if forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); forwarded != "" {
+func (a *App) sourceIP(r *http.Request) string {
+	if forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); forwarded != "" && a.isTrustedProxy(r.RemoteAddr) {
 		return strings.TrimSpace(strings.Split(forwarded, ",")[0])
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
@@ -803,4 +831,73 @@ func sourceIP(r *http.Request) string {
 		return host
 	}
 	return r.RemoteAddr
+}
+
+func (a *App) isTrustedProxy(remoteAddr string) bool {
+	if len(a.trustedProxies) == 0 {
+		return false
+	}
+	host, _, err := net.SplitHostPort(strings.TrimSpace(remoteAddr))
+	if err != nil {
+		host = strings.TrimSpace(remoteAddr)
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	for _, network := range a.trustedProxies {
+		if network.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+func ValidateListenAddress(listenAddr string, authEnabled bool, insecure bool) error {
+	if authEnabled || insecure || isLoopbackListenAddress(listenAddr) {
+		return nil
+	}
+	return errors.New("refusing to listen on a non-loopback address without authentication; use --insecure for local development")
+}
+
+func isLoopbackListenAddress(listenAddr string) bool {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(listenAddr))
+	if err != nil {
+		host = strings.TrimSpace(listenAddr)
+	}
+	if host == "localhost" {
+		return true
+	}
+	if host == "" {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func parseTrustedProxies(values []string) ([]*net.IPNet, error) {
+	networks := make([]*net.IPNet, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if !strings.Contains(value, "/") {
+			ip := net.ParseIP(value)
+			if ip == nil {
+				return nil, fmt.Errorf("invalid trusted proxy address: %s", value)
+			}
+			bits := 32
+			if ip.To4() == nil {
+				bits = 128
+			}
+			value = fmt.Sprintf("%s/%d", ip.String(), bits)
+		}
+		_, network, err := net.ParseCIDR(value)
+		if err != nil {
+			return nil, fmt.Errorf("invalid trusted proxy cidr %q: %w", value, err)
+		}
+		networks = append(networks, network)
+	}
+	return networks, nil
 }

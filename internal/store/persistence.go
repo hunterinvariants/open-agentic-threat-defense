@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/open-agentic-threat-defense/oadtd/internal/domain"
@@ -115,6 +116,9 @@ func (s *Store) RestoreSnapshot(snap Snapshot) error {
 	s.assets = cloneAssets(restored.assets)
 	s.rebuildFingerprintsLocked()
 	s.lastErr = ""
+	if err := s.enforceRetentionLocked(); err != nil {
+		return err
+	}
 	return s.persistLocked()
 }
 
@@ -256,4 +260,106 @@ func cloneAssets(assets map[string]domain.Asset) map[string]domain.Asset {
 		cloned[key] = value
 	}
 	return cloned
+}
+
+func (s *Store) enforceRetentionLocked() error {
+	if s.retentionWindow <= 0 {
+		return nil
+	}
+
+	cutoff := time.Now().UTC().Add(-s.retentionWindow)
+	retained := s.retainedSnapshotLocked(cutoff)
+
+	s.events = append([]domain.Event(nil), retained.Events...)
+	s.alerts = append([]domain.Alert(nil), retained.Alerts...)
+	s.actions = append([]domain.ResponseAction(nil), retained.Actions...)
+	s.audits = append([]domain.AuditEvent(nil), retained.Audits...)
+	s.assets = cloneAssets(retained.Assets)
+	s.rebuildFingerprintsLocked()
+
+	if s.db != nil {
+		if err := s.postgresRestoreSnapshotLocked(retained); err != nil {
+			return err
+		}
+	}
+
+	s.lastErr = ""
+	return nil
+}
+
+func (s *Store) retainedSnapshotLocked(cutoff time.Time) Snapshot {
+	retained := New()
+	retained.mode = s.mode
+	retained.path = s.path
+	retained.db = s.db
+	retained.schemaVersion = s.schemaVersion
+	retained.events = filterEventsByCutoff(s.events, cutoff)
+	retained.alerts = filterAlertsByCutoff(s.alerts, cutoff)
+	retained.actions = filterActionsByCutoff(s.actions, cutoff)
+	retained.audits = filterAuditsByCutoff(s.audits, cutoff)
+	retained.rebuildAssetsLocked()
+	retained.rebuildFingerprintsLocked()
+	return retained.snapshotLocked()
+}
+
+func filterEventsByCutoff(events []domain.Event, cutoff time.Time) []domain.Event {
+	filtered := make([]domain.Event, 0, len(events))
+	for _, event := range events {
+		if !event.Timestamp.IsZero() && event.Timestamp.Before(cutoff) {
+			continue
+		}
+		filtered = append(filtered, event)
+	}
+	return filtered
+}
+
+func filterAlertsByCutoff(alerts []domain.Alert, cutoff time.Time) []domain.Alert {
+	filtered := make([]domain.Alert, 0, len(alerts))
+	for _, alert := range alerts {
+		if !alert.CreatedAt.IsZero() && alert.CreatedAt.Before(cutoff) {
+			continue
+		}
+		filtered = append(filtered, alert)
+	}
+	return filtered
+}
+
+func filterActionsByCutoff(actions []domain.ResponseAction, cutoff time.Time) []domain.ResponseAction {
+	filtered := make([]domain.ResponseAction, 0, len(actions))
+	for _, action := range actions {
+		if !action.CreatedAt.IsZero() && action.CreatedAt.Before(cutoff) {
+			continue
+		}
+		filtered = append(filtered, action)
+	}
+	return filtered
+}
+
+func filterAuditsByCutoff(audits []domain.AuditEvent, cutoff time.Time) []domain.AuditEvent {
+	filtered := make([]domain.AuditEvent, 0, len(audits))
+	for _, audit := range audits {
+		if !audit.Timestamp.IsZero() && audit.Timestamp.Before(cutoff) {
+			continue
+		}
+		filtered = append(filtered, audit)
+	}
+	return filtered
+}
+
+func redactPersistenceError(err string) string {
+	err = strings.TrimSpace(err)
+	if err == "" {
+		return ""
+	}
+	lower := strings.ToLower(err)
+	switch {
+	case strings.Contains(lower, "postgres"):
+		return "postgres persistence error"
+	case strings.Contains(lower, ".json") || strings.Contains(lower, "snapshot"):
+		return "snapshot persistence error"
+	case strings.Contains(lower, "permission denied") || strings.Contains(lower, "operation not permitted"):
+		return "filesystem persistence error"
+	default:
+		return "persistence error"
+	}
 }

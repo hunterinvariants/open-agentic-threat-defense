@@ -1,10 +1,16 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"flag"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
 
 	"github.com/open-agentic-threat-defense/oadtd/internal/config"
 	"github.com/open-agentic-threat-defense/oadtd/internal/server"
@@ -29,6 +35,9 @@ func main() {
 	githubToken := flag.String("github-token", os.Getenv("OATD_GITHUB_TOKEN"), "GitHub token for issue and workflow integrations")
 	githubWorkflowFile := flag.String("github-workflow-file", os.Getenv("OATD_GITHUB_WORKFLOW_FILE"), "GitHub workflow file for approved response actions")
 	githubWorkflowRef := flag.String("github-workflow-ref", os.Getenv("OATD_GITHUB_WORKFLOW_REF"), "GitHub ref for workflow dispatch")
+	trustedProxies := flag.String("trusted-proxies", os.Getenv("OATD_TRUSTED_PROXIES"), "comma-separated list of trusted proxy CIDRs or IPs")
+	retentionWindow := flag.String("retention-window", defaultString(os.Getenv("OATD_RETENTION_WINDOW"), "30d"), "retention window for events, alerts, actions, and audits")
+	insecure := flag.Bool("insecure", parseBoolEnv(os.Getenv("OATD_INSECURE")), "allow open mode on non-loopback listen addresses")
 	withDemo := flag.Bool("demo", false, "load safe demo telemetry at startup")
 	flag.Parse()
 
@@ -36,7 +45,14 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	if err := server.ValidateListenAddress(*addr, len(runtimeConfig.Users) > 0 || strings.TrimSpace(*apiToken) != "", *insecure); err != nil {
+		log.Fatal(err)
+	}
 	window, err := runtimeConfig.CorrelationWindowDuration()
+	if err != nil {
+		log.Fatal(err)
+	}
+	retention, err := time.ParseDuration(strings.TrimSpace(*retentionWindow))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -61,6 +77,8 @@ func main() {
 		GitHubToken:          *githubToken,
 		GitHubWorkflowFile:   *githubWorkflowFile,
 		GitHubWorkflowRef:    *githubWorkflowRef,
+		TrustedProxies:       splitCSV(*trustedProxies),
+		RetentionWindow:      retention,
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -74,7 +92,58 @@ func main() {
 	}
 
 	log.Printf("Open Agentic Threat Defense %s listening on http://localhost%s", server.Version, *addr)
-	if err := http.ListenAndServe(*addr, app.Routes()); err != nil {
+	srv := &http.Server{
+		Addr:              *addr,
+		Handler:           app.Routes(),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(stop)
+
+	go func() {
+		<-stop
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(ctx); err != nil {
+			log.Printf("graceful shutdown failed: %v", err)
+		}
+	}()
+
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
+	}
+}
+
+func splitCSV(value string) []string {
+	parts := strings.Split(value, ",")
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		values = append(values, part)
+	}
+	return values
+}
+
+func defaultString(value string, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
+}
+
+func parseBoolEnv(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
 	}
 }

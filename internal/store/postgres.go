@@ -18,6 +18,11 @@ func NewWithPostgres(dsn string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	db.SetMaxOpenConns(10)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(30 * time.Minute)
+	db.SetConnMaxIdleTime(5 * time.Minute)
+
 	ctx, cancel := context.WithTimeout(context.Background(), postgresTimeout)
 	defer cancel()
 	if err := db.PingContext(ctx); err != nil {
