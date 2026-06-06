@@ -94,9 +94,16 @@ sudo mkdir -p /opt/actions-runner
 sudo chown runner:runner /opt/actions-runner
 ```
 
-Then download the GitHub Actions runner from the repository settings page,
-configure it with the `oadtd-staging` label, and install it as a service under
-the `runner` user.
+Then run:
+
+```bash
+sudo bash scripts/setup-self-hosted-runner.sh
+```
+
+The script downloads the latest Linux x64 runner release, registers it against
+the repository, and installs it as a service under the `runner` user. It uses
+either authenticated `gh` or `GITHUB_TOKEN` to create the runner registration
+token.
 
 The runner user needs passwordless sudo for the deployment steps:
 
