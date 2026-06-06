@@ -7,6 +7,8 @@
 - Correlation engine.
 - Dry-run response planner.
 - Local dashboard.
+- Optional JSON snapshot persistence.
+- Optional token protection for write endpoints.
 - AGPLv3-or-later plus commercial dual-license path.
 - CLA requirement from day 1.
 
@@ -50,4 +52,3 @@ Status: implemented in this repository.
 Do not position this as another prompt-injection firewall. The strongest angle
 is correlated defense against autonomous, tool-using adversaries across agent,
 endpoint, network, deception, and response layers.
-

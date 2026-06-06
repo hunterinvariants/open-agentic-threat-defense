@@ -9,13 +9,15 @@ malware behavior, or autonomous propagation. Demo data generates telemetry only.
 
 ## What Exists Now
 
-- Go HTTP service with local in-memory storage.
+- Go HTTP service with in-memory storage or optional local JSON snapshot
+  persistence.
 - Policy engine for agent-tool abuse, secret exposure, unexpected egress,
   discovery behavior, deception hits, and suspicious model runtime activity.
 - Correlator for multi-signal sequences such as discovery, credential touch,
   agent tool call, and outbound flow.
 - Dry-run response planner for host isolation, egress blocking, tool disabling,
   ticket creation, and secret rotation.
+- Optional token protection for write endpoints.
 - Browser dashboard with asset risk graph, alerts, events, rules, and response
   actions.
 - AGPLv3-or-later community license, commercial dual-license path, and CLA from
@@ -31,6 +33,13 @@ $env:GOTELEMETRY="off"
 $env:GOCACHE="$PWD\.cache\go-build"
 $env:GOMODCACHE="$PWD\.cache\go-mod"
 go run ./cmd/oadtd --demo
+```
+
+Run with local persistence and write-token protection:
+
+```powershell
+$env:OATD_API_TOKEN="replace-with-a-local-secret"
+go run ./cmd/oadtd --demo --data .cache\oadtd-state.json
 ```
 
 Open:
@@ -66,6 +75,15 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8080/api/events -ContentTyp
 }'
 ```
 
+With write-token protection enabled:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://localhost:8080/api/events `
+  -Headers @{ Authorization = "Bearer $env:OATD_API_TOKEN" } `
+  -ContentType application/json `
+  -Body '{"kind":"deception_hit","asset_id":"dev-agent-01","signal":"canary token touched"}'
+```
+
 Useful endpoints:
 
 - `GET /api/status`
@@ -77,6 +95,20 @@ Useful endpoints:
 - `GET /api/responses`
 - `POST /api/responses`
 - `POST /api/demo`
+
+## Runtime Options
+
+```text
+--addr       HTTP listen address, default :8080
+--web        static dashboard directory, default web
+--demo       load safe demo telemetry at startup
+--data       optional JSON snapshot path for local persistence
+--api-token  optional token for POST endpoints, defaults to OATD_API_TOKEN
+```
+
+When `--api-token` or `OATD_API_TOKEN` is set, read endpoints remain available
+for the dashboard and health checks, while write endpoints require
+`Authorization: Bearer <token>` or `X-OATD-Token: <token>`.
 
 ## License
 
@@ -93,4 +125,3 @@ External contributions require a signed CLA before merge. See [CLA.md](CLA.md).
 This project is for authorized defensive monitoring and response simulation.
 Do not add exploit code, malware behavior, credential theft tooling, or
 autonomous propagation logic.
-

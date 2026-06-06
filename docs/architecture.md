@@ -25,9 +25,10 @@ types.
 
 ### Store
 
-`internal/store` keeps in-memory events, alerts, response actions, and risk
-ranked assets. This is intentionally simple for the MVP and should become a
-durable store in the alpha phase.
+`internal/store` keeps events, alerts, response actions, and risk ranked assets.
+By default it runs in memory. When `--data` is set, it writes a local JSON
+snapshot and restores state on startup. This keeps the MVP dependency-free while
+leaving room for SQLite or Postgres in the alpha phase.
 
 ### Policy Engine
 
@@ -56,6 +57,12 @@ containment actions against real systems.
 `web/` provides an operational dashboard for assets, alerts, events, policies,
 and dry-run response actions.
 
+### Write Authentication
+
+Write endpoints can be protected with `--api-token` or `OATD_API_TOKEN`.
+Read endpoints remain available so the dashboard and health checks can load
+without embedding a token in static assets.
+
 ## Near-Term Production Shape
 
 The next architecture step is to split collectors, policy evaluation, durable
@@ -74,9 +81,11 @@ flowchart LR
   F --> I["Dashboard"]
 ```
 
+The current file-backed snapshot should be treated as local development storage,
+not as a clustered production database.
+
 ## Defensive Boundaries
 
 The system should only simulate adversary behavior by emitting telemetry. It
 must not include exploit code, self-propagation, credential theft, or destructive
 actions.
-

@@ -110,11 +110,14 @@ type RuleDescriptor struct {
 }
 
 type Status struct {
-	Version       string    `json:"version"`
-	UptimeSeconds int64     `json:"uptime_seconds"`
-	EventCount    int       `json:"event_count"`
-	AlertCount    int       `json:"alert_count"`
-	AssetCount    int       `json:"asset_count"`
-	ActionCount   int       `json:"action_count"`
-	StartedAt     time.Time `json:"started_at"`
+	Version          string    `json:"version"`
+	UptimeSeconds    int64     `json:"uptime_seconds"`
+	EventCount       int       `json:"event_count"`
+	AlertCount       int       `json:"alert_count"`
+	AssetCount       int       `json:"asset_count"`
+	ActionCount      int       `json:"action_count"`
+	StartedAt        time.Time `json:"started_at"`
+	StorageMode      string    `json:"storage_mode"`
+	StoragePath      string    `json:"storage_path,omitempty"`
+	LastStorageError string    `json:"last_storage_error,omitempty"`
 }

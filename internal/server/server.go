@@ -1,9 +1,11 @@
 package server
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -25,22 +27,42 @@ type App struct {
 	correlator *correlator.Correlator
 	responder  *response.Planner
 	webDir     string
+	apiToken   string
 	startedAt  time.Time
 	counter    atomic.Uint64
 }
 
+type Options struct {
+	WebDir   string
+	DataPath string
+	APIToken string
+}
+
 func New(webDir string) *App {
-	if webDir == "" {
-		webDir = "web"
+	app, err := NewWithOptions(Options{WebDir: webDir})
+	if err != nil {
+		panic(err)
+	}
+	return app
+}
+
+func NewWithOptions(options Options) (*App, error) {
+	if options.WebDir == "" {
+		options.WebDir = "web"
+	}
+	st, err := store.NewWithPath(options.DataPath)
+	if err != nil {
+		return nil, err
 	}
 	return &App{
-		store:      store.New(),
+		store:      st,
 		policy:     policy.NewDefault(),
 		correlator: correlator.New(30 * time.Minute),
 		responder:  response.NewDryRun(),
-		webDir:     webDir,
+		webDir:     options.WebDir,
+		apiToken:   options.APIToken,
 		startedAt:  time.Now().UTC(),
-	}
+	}, nil
 }
 
 func (a *App) Routes() http.Handler {
@@ -53,10 +75,10 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("/api/policies", a.handlePolicies)
 	mux.HandleFunc("/api/demo", a.handleDemo)
 	mux.Handle("/", a.staticHandler())
-	return withSecurityHeaders(mux)
+	return withSecurityHeaders(a.withAuth(mux))
 }
 
-func (a *App) LoadDemo() []domain.Alert {
+func (a *App) LoadDemo() ([]domain.Alert, error) {
 	events := DemoEvents(time.Now().UTC())
 	for i := range events {
 		events[i].ID = ""
@@ -71,14 +93,21 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	events, alerts, assets, actions := a.store.Counts()
+	storageMode := "memory"
+	if a.store.PersistencePath() != "" {
+		storageMode = "file"
+	}
 	writeJSON(w, http.StatusOK, domain.Status{
-		Version:       Version,
-		UptimeSeconds: int64(time.Since(a.startedAt).Seconds()),
-		EventCount:    events,
-		AlertCount:    alerts,
-		AssetCount:    assets,
-		ActionCount:   actions,
-		StartedAt:     a.startedAt,
+		Version:          Version,
+		UptimeSeconds:    int64(time.Since(a.startedAt).Seconds()),
+		EventCount:       events,
+		AlertCount:       alerts,
+		AssetCount:       assets,
+		ActionCount:      actions,
+		StartedAt:        a.startedAt,
+		StorageMode:      storageMode,
+		StoragePath:      a.store.PersistencePath(),
+		LastStorageError: a.store.LastPersistenceError(),
 	})
 }
 
@@ -92,7 +121,11 @@ func (a *App) handleEvents(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		alerts := a.ingest(events)
+		alerts, err := a.ingest(events)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
 		writeJSON(w, http.StatusAccepted, map[string]any{
 			"events_ingested": len(events),
 			"alerts_created":  len(alerts),
@@ -152,7 +185,10 @@ func (a *App) handleResponses(w http.ResponseWriter, r *http.Request) {
 		for i := range actions {
 			a.prepareAction(&actions[i])
 		}
-		a.store.AddActions(actions)
+		if err := a.store.AddActions(actions); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
 		writeJSON(w, http.StatusAccepted, actions)
 	default:
 		methodNotAllowed(w)
@@ -164,18 +200,24 @@ func (a *App) handleDemo(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-	alerts := a.LoadDemo()
+	alerts, err := a.LoadDemo()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"alerts_created": len(alerts),
 		"alerts":         alerts,
 	})
 }
 
-func (a *App) ingest(events []domain.Event) []domain.Alert {
+func (a *App) ingest(events []domain.Event) ([]domain.Alert, error) {
 	alerts := []domain.Alert{}
 	for i := range events {
 		a.prepareEvent(&events[i])
-		a.store.AddEvent(events[i])
+		if err := a.store.AddEvent(events[i]); err != nil {
+			return nil, err
+		}
 		alerts = append(alerts, a.policy.Evaluate(events[i])...)
 	}
 
@@ -242,8 +284,14 @@ func (a *App) staticHandler() http.Handler {
 
 func decodeEvents(r *http.Request) ([]domain.Event, error) {
 	var raw json.RawMessage
-	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+	limited := http.MaxBytesReader(nil, r.Body, 1<<20)
+	defer limited.Close()
+	decoder := json.NewDecoder(limited)
+	if err := decoder.Decode(&raw); err != nil {
 		return nil, err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return nil, errors.New("request body must contain a single JSON value")
 	}
 	trimmed := strings.TrimSpace(string(raw))
 	if trimmed == "" {
@@ -285,4 +333,37 @@ func withSecurityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		next.ServeHTTP(w, r)
 	})
+}
+
+func (a *App) withAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if a.apiToken == "" || !strings.HasPrefix(r.URL.Path, "/api/") || isReadOnly(r.Method) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if !constantTimeEqual(readToken(r), a.apiToken) {
+			writeError(w, http.StatusUnauthorized, errors.New("missing or invalid API token"))
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func isReadOnly(method string) bool {
+	return method == http.MethodGet || method == http.MethodHead || method == http.MethodOptions
+}
+
+func readToken(r *http.Request) string {
+	header := r.Header.Get("Authorization")
+	if strings.HasPrefix(strings.ToLower(header), "bearer ") {
+		return strings.TrimSpace(header[len("Bearer "):])
+	}
+	return strings.TrimSpace(r.Header.Get("X-OATD-Token"))
+}
+
+func constantTimeEqual(got string, want string) bool {
+	if got == "" || want == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }

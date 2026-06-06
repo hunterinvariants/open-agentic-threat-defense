@@ -19,15 +19,32 @@ const els = {
 const emptyTemplate = document.querySelector("#empty-template");
 
 async function api(path, options = {}) {
+  const headers = { "Content-Type": "application/json" };
+  const token = sessionStorage.getItem("oatd_api_token");
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
   const response = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
+    headers,
     ...options
   });
+  if (response.status === 401 && isWrite(options.method)) {
+    const nextToken = window.prompt("API token");
+    if (nextToken) {
+      sessionStorage.setItem("oatd_api_token", nextToken);
+      return api(path, options);
+    }
+  }
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
     throw new Error(payload.error || `${response.status} ${response.statusText}`);
   }
   return response.json();
+}
+
+function isWrite(method = "GET") {
+  return !["GET", "HEAD", "OPTIONS"].includes(method.toUpperCase());
 }
 
 async function refresh() {
@@ -283,4 +300,3 @@ refresh().catch((error) => {
 setInterval(() => {
   refresh().catch((error) => console.error(error));
 }, 8000);
-

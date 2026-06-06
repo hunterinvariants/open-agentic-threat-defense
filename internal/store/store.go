@@ -15,6 +15,8 @@ type Store struct {
 	actions      []domain.ResponseAction
 	assets       map[string]domain.Asset
 	fingerprints map[string]struct{}
+	path         string
+	lastErr      string
 }
 
 func New() *Store {
@@ -24,12 +26,13 @@ func New() *Store {
 	}
 }
 
-func (s *Store) AddEvent(event domain.Event) {
+func (s *Store) AddEvent(event domain.Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.events = append(s.events, event)
 	s.upsertAssetLocked(event)
+	return s.persistLocked()
 }
 
 func (s *Store) ListEvents() []domain.Event {
@@ -43,7 +46,7 @@ func (s *Store) ListEvents() []domain.Event {
 	return events
 }
 
-func (s *Store) AddAlerts(alerts []domain.Alert) []domain.Alert {
+func (s *Store) AddAlerts(alerts []domain.Alert) ([]domain.Alert, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -59,7 +62,10 @@ func (s *Store) AddAlerts(alerts []domain.Alert) []domain.Alert {
 		added = append(added, alert)
 		s.raiseAssetRiskLocked(alert)
 	}
-	return added
+	if len(added) == 0 {
+		return added, nil
+	}
+	return added, s.persistLocked()
 }
 
 func (s *Store) ListAlerts() []domain.Alert {
@@ -85,11 +91,12 @@ func (s *Store) GetAlert(id string) (domain.Alert, bool) {
 	return domain.Alert{}, false
 }
 
-func (s *Store) AddActions(actions []domain.ResponseAction) {
+func (s *Store) AddActions(actions []domain.ResponseAction) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.actions = append(s.actions, actions...)
+	return s.persistLocked()
 }
 
 func (s *Store) ListActions() []domain.ResponseAction {
@@ -125,6 +132,20 @@ func (s *Store) Counts() (events int, alerts int, assets int, actions int) {
 	defer s.mu.RUnlock()
 
 	return len(s.events), len(s.alerts), len(s.assets), len(s.actions)
+}
+
+func (s *Store) PersistencePath() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.path
+}
+
+func (s *Store) LastPersistenceError() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.lastErr
 }
 
 func (s *Store) upsertAssetLocked(event domain.Event) {
