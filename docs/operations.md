@@ -102,8 +102,9 @@ sudo bash scripts/setup-self-hosted-runner.sh
 
 The script downloads the latest Linux x64 runner release, registers it against
 the repository, and installs it as a service under the `runner` user. It uses
-either authenticated `gh` or `GITHUB_TOKEN` to create the runner registration
-token.
+`gh auth token` or `GITHUB_TOKEN` to create the runner registration token.
+That GitHub token must have repository admin access so GitHub can create the
+runner registration token.
 
 The runner user needs passwordless sudo for the deployment steps:
 

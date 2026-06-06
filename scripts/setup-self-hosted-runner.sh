@@ -53,21 +53,26 @@ curl -fsSL -o "$tmp_dir/$runner_tarball" "$runner_url"
 chown "$runner_user:$runner_user" "$tmp_dir/$runner_tarball"
 sudo -u "$runner_user" tar xzf "$tmp_dir/$runner_tarball" -C "$runner_dir"
 
-if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-  registration_token="$(gh api "repos/$repo_slug/actions/runners/registration-token" --jq .token)"
-elif [ -n "${GITHUB_TOKEN:-}" ]; then
-  registration_json="$(
-    curl -fsSL -X POST \
-      -H "Accept: application/vnd.github+json" \
-      -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-      -H "X-GitHub-Api-Version: 2026-03-10" \
-      "https://api.github.com/repos/$repo_slug/actions/runners/registration-token"
-  )"
-  registration_token="$(printf '%s' "$registration_json" | sed -n 's/.*"token":[[:space:]]*"\([^"]*\)".*/\1/p')"
-else
-  echo "Install GitHub CLI (gh) and authenticate, or set GITHUB_TOKEN to a token with repo admin access." >&2
+registration_auth_token=""
+if command -v gh >/dev/null 2>&1; then
+  registration_auth_token="$(gh auth token 2>/dev/null || true)"
+fi
+if [ -z "$registration_auth_token" ] && [ -n "${GITHUB_TOKEN:-}" ]; then
+  registration_auth_token="$GITHUB_TOKEN"
+fi
+if [ -z "$registration_auth_token" ]; then
+  echo "Authenticate gh on this VM or set GITHUB_TOKEN to a repo-admin token." >&2
   exit 1
 fi
+
+registration_json="$(
+  curl -fsSL -X POST \
+    -H "Accept: application/vnd.github+json" \
+    -H "Authorization: Bearer ${registration_auth_token}" \
+    -H "X-GitHub-Api-Version: 2026-03-10" \
+    "https://api.github.com/repos/$repo_slug/actions/runners/registration-token"
+)"
+registration_token="$(printf '%s' "$registration_json" | sed -n 's/.*"token":[[:space:]]*"\([^"]*\)".*/\1/p')"
 
 if [ -z "${registration_token:-}" ]; then
   echo "Could not obtain a runner registration token" >&2
