@@ -92,7 +92,7 @@ else
 fi
 
 cat >/etc/sudoers.d/oadtd-runner <<'EOF'
-runner ALL=(root) NOPASSWD: /usr/bin/install, /bin/ln, /bin/rm, /bin/chown, /bin/systemctl, /usr/bin/journalctl
+runner ALL=(root) NOPASSWD: /usr/bin/install, /bin/ln, /bin/rm, /bin/chown, /usr/bin/systemctl, /bin/systemctl, /usr/bin/journalctl
 EOF
 chmod 0440 /etc/sudoers.d/oadtd-runner
 

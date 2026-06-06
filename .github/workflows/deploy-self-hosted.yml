@@ -19,6 +19,9 @@ on:
         default: /readyz
         type: string
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 permissions:
   contents: read
 
@@ -26,11 +29,11 @@ jobs:
   deploy:
     runs-on: [self-hosted, linux, x64, oadtd-staging]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ inputs.ref }}
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.25.x"
 
