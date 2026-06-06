@@ -67,7 +67,17 @@ go run ./cmd/oadtd --demo
 
 The payload type is `oadtd.alerts`.
 
-Approved response actions can also be exported to a webhook transport:
+Incident ticket creation can be exported to a ticketing webhook transport:
+
+```powershell
+$env:OATD_TICKET_WEBHOOK_URL="https://ticketing.example.invalid/oatd"
+$env:OATD_TICKET_WEBHOOK_TOKEN="replace-with-token"
+go run ./cmd/oadtd --demo
+```
+
+The payload type is `oadtd.incident_ticket`.
+
+Approved response actions can also be exported to a response webhook transport:
 
 ```powershell
 $env:OATD_RESPONSE_WEBHOOK_URL="https://soar.example.invalid/oatd"
@@ -106,6 +116,11 @@ go run ./cmd/oadtdctl restore --postgres-dsn $env:OATD_POSTGRES_DSN --input back
 
 The service also exposes `GET /healthz` and `GET /readyz` for process and
 database readiness checks.
+
+Response actions are split by connector:
+
+- `create_incident_ticket` uses the ticket webhook as soon as the plan is stored.
+- approval-required actions use the response webhook only after operator approval.
 
 ## Collector Agents
 

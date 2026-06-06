@@ -23,6 +23,8 @@ Required operational steps:
 
 - keep a signed CLA record for every external contributor;
 - block PR merge until the CLA is verified;
+- enforce the CLA check in GitHub Actions using the PR template checkbox or the
+  `cla-signed` label;
 - preserve commit attribution;
 - avoid accepting code copied from incompatible licenses;
 - have counsel review the CLA before broad public contribution intake.
@@ -35,4 +37,3 @@ Recommended split:
   telemetry simulator, basic response plans;
 - commercial edition: SSO/SAML, RBAC, multi-tenancy, enterprise connectors,
   central policy distribution, compliance reports, managed rule packs, support.
-

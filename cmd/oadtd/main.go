@@ -19,6 +19,8 @@ func main() {
 	apiToken := flag.String("api-token", os.Getenv("OATD_API_TOKEN"), "optional API token for write endpoints")
 	alertWebhookURL := flag.String("alert-webhook-url", os.Getenv("OATD_ALERT_WEBHOOK_URL"), "optional SIEM/webhook URL for new alerts")
 	alertWebhookToken := flag.String("alert-webhook-token", os.Getenv("OATD_ALERT_WEBHOOK_TOKEN"), "optional bearer token for alert webhook")
+	ticketWebhookURL := flag.String("ticket-webhook-url", os.Getenv("OATD_TICKET_WEBHOOK_URL"), "optional webhook URL for incident ticket creation")
+	ticketWebhookToken := flag.String("ticket-webhook-token", os.Getenv("OATD_TICKET_WEBHOOK_TOKEN"), "optional bearer token for ticket webhook")
 	responseWebhookURL := flag.String("response-webhook-url", os.Getenv("OATD_RESPONSE_WEBHOOK_URL"), "optional webhook URL for approved response actions")
 	responseWebhookToken := flag.String("response-webhook-token", os.Getenv("OATD_RESPONSE_WEBHOOK_TOKEN"), "optional bearer token for response webhook")
 	withDemo := flag.Bool("demo", false, "load safe demo telemetry at startup")
@@ -43,6 +45,8 @@ func main() {
 		CorrelationWindow:    window,
 		AlertWebhookURL:      *alertWebhookURL,
 		AlertWebhookToken:    *alertWebhookToken,
+		TicketWebhookURL:     *ticketWebhookURL,
+		TicketWebhookToken:   *ticketWebhookToken,
 		ResponseWebhookURL:   *responseWebhookURL,
 		ResponseWebhookToken: *responseWebhookToken,
 	})

@@ -42,6 +42,11 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - name: Generate checksums
+        shell: bash
+        run: |
+          cd dist
+          find . -maxdepth 1 -type f \( -name 'oadtd-*' -o -name 'oadtdctl-*' \) -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*

@@ -33,6 +33,7 @@ type App struct {
 	webDir          string
 	auth            *auth.Authenticator
 	webhook         exporter.Webhook
+	ticketWebhook   exporter.Webhook
 	responseWebhook exporter.Webhook
 	exportMu        sync.RWMutex
 	exportErr       string
@@ -50,6 +51,8 @@ type Options struct {
 	CorrelationWindow    time.Duration
 	AlertWebhookURL      string
 	AlertWebhookToken    string
+	TicketWebhookURL     string
+	TicketWebhookToken   string
 	ResponseWebhookURL   string
 	ResponseWebhookToken string
 }
@@ -89,6 +92,10 @@ func NewWithOptions(options Options) (*App, error) {
 		webhook: exporter.Webhook{
 			URL:   options.AlertWebhookURL,
 			Token: options.AlertWebhookToken,
+		},
+		ticketWebhook: exporter.Webhook{
+			URL:   options.TicketWebhookURL,
+			Token: options.TicketWebhookToken,
 		},
 		responseWebhook: exporter.Webhook{
 			URL:   options.ResponseWebhookURL,
@@ -374,27 +381,20 @@ func (a *App) handleResponseApproval(w http.ResponseWriter, r *http.Request) {
 		"asset_id":    action.AssetID,
 		"action_type": action.Type,
 	})
-	executionStatus := "not_configured"
-	executionError := ""
-	if a.responseWebhook.URL != "" {
-		if err := a.responseWebhook.ExportResponseAction(action); err != nil {
-			executionStatus = "failed"
-			executionError = err.Error()
-			a.recordAudit(r, principal, "responses.execute", "response_action", action.ID, "failed", map[string]string{
-				"error": err.Error(),
-			})
-		} else {
-			executionStatus = "sent"
-			a.recordAudit(r, principal, "responses.execute", "response_action", action.ID, "accepted", map[string]string{
-				"transport": "webhook",
-			})
+	if action.Type == "create_incident_ticket" {
+		var err error
+		action, err = a.executeTicketAction(r, principal, action)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
 		}
-	}
-	if recorded, ok, err := a.store.RecordActionExecution(action.ID, time.Now().UTC(), executionStatus, executionError); err == nil && ok {
-		action = recorded
-	} else if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
+	} else {
+		var err error
+		action, err = a.executeResponseAction(r, principal, action)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
 	}
 	writeJSON(w, http.StatusAccepted, action)
 }
@@ -428,6 +428,17 @@ func (a *App) handleResponses(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
+		for i := range actions {
+			if actions[i].Type != "create_incident_ticket" {
+				continue
+			}
+			action, err := a.executeTicketAction(r, principalFromRequest(r), actions[i])
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err)
+				return
+			}
+			actions[i] = action
+		}
 		a.recordAudit(r, principalFromRequest(r), "responses.plan", "alert", alert.ID, "accepted", map[string]string{
 			"actions": fmt.Sprintf("%d", len(actions)),
 		})
@@ -454,6 +465,70 @@ func (a *App) handleDemo(w http.ResponseWriter, r *http.Request) {
 		"alerts_created": len(alerts),
 		"alerts":         alerts,
 	})
+}
+
+func (a *App) executeTicketAction(r *http.Request, principal auth.Principal, action domain.ResponseAction) (domain.ResponseAction, error) {
+	status := "not_configured"
+	executionError := ""
+	if a.ticketWebhook.URL != "" {
+		if err := a.ticketWebhook.ExportIncidentTicket(action); err != nil {
+			status = "failed"
+			executionError = err.Error()
+			a.recordAudit(r, principal, "responses.execute", "response_action", action.ID, "failed", map[string]string{
+				"error":     err.Error(),
+				"connector": "incident_ticket",
+			})
+		} else {
+			status = "sent"
+			a.recordAudit(r, principal, "responses.execute", "response_action", action.ID, "accepted", map[string]string{
+				"connector": "incident_ticket",
+			})
+		}
+	}
+	now := time.Now().UTC()
+	recorded, ok, err := a.store.RecordActionExecution(action.ID, now, status, executionError)
+	if err != nil {
+		return domain.ResponseAction{}, err
+	}
+	if ok {
+		return recorded, nil
+	}
+	action.ExecutionStatus = status
+	action.ExecutionError = executionError
+	action.ExecutedAt = &now
+	return action, nil
+}
+
+func (a *App) executeResponseAction(r *http.Request, principal auth.Principal, action domain.ResponseAction) (domain.ResponseAction, error) {
+	status := "not_configured"
+	executionError := ""
+	if a.responseWebhook.URL != "" {
+		if err := a.responseWebhook.ExportResponseAction(action); err != nil {
+			status = "failed"
+			executionError = err.Error()
+			a.recordAudit(r, principal, "responses.execute", "response_action", action.ID, "failed", map[string]string{
+				"error":     err.Error(),
+				"connector": "response_webhook",
+			})
+		} else {
+			status = "sent"
+			a.recordAudit(r, principal, "responses.execute", "response_action", action.ID, "accepted", map[string]string{
+				"connector": "response_webhook",
+			})
+		}
+	}
+	now := time.Now().UTC()
+	recorded, ok, err := a.store.RecordActionExecution(action.ID, now, status, executionError)
+	if err != nil {
+		return domain.ResponseAction{}, err
+	}
+	if ok {
+		return recorded, nil
+	}
+	action.ExecutionStatus = status
+	action.ExecutionError = executionError
+	action.ExecutedAt = &now
+	return action, nil
 }
 
 func (a *App) ingest(events []domain.Event) ([]domain.Alert, error) {

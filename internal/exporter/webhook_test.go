@@ -54,3 +54,23 @@ func TestWebhookExportsResponseAction(t *testing.T) {
 		t.Fatalf("unexpected payload: %#v", got)
 	}
 }
+
+func TestWebhookExportsIncidentTicket(t *testing.T) {
+	var got IncidentTicketPayload
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	webhook := Webhook{URL: server.URL, Client: server.Client()}
+	err := webhook.ExportIncidentTicket(domain.ResponseAction{ID: "act-1", Type: "create_incident_ticket"})
+	if err != nil {
+		t.Fatalf("export incident ticket: %v", err)
+	}
+	if got.Type != "oadtd.incident_ticket" || got.ResponseAction.ID != "act-1" {
+		t.Fatalf("unexpected payload: %#v", got)
+	}
+}

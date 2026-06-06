@@ -18,7 +18,8 @@ malware behavior, or autonomous propagation. Demo data generates telemetry only.
 - Correlator for multi-signal sequences such as discovery, credential touch,
   agent tool call, and outbound flow.
 - Dry-run response planner for host isolation, egress blocking, tool disabling,
-  ticket creation, and secret rotation, with approval-gated execution export.
+  ticket creation, and secret rotation, with approval-gated execution export
+  plus a separate incident-ticket connector.
 - User/token authentication with role-based access control.
 - Audit log for authentication failures, RBAC denials, ingestion, response
   planning, and response approvals.
@@ -86,6 +87,8 @@ Linux/Windows binaries for `amd64` and `arm64`.
 GitHub security automation includes CodeQL analysis and Dependabot updates for
 Go modules and GitHub Actions.
 
+Tagged releases publish platform binaries and a `SHA256SUMS` manifest.
+
 Postgres operators can create and restore portable JSON backups with
 `oadtdctl backup` and `oadtdctl restore`.
 
@@ -93,6 +96,8 @@ Approved response actions can be exported to an external webhook transport
 after operator approval by setting:
 
 ```text
+--ticket-webhook-url     optional webhook URL for incident ticket creation
+--ticket-webhook-token   optional bearer token for ticket webhook
 --response-webhook-url    optional webhook URL for approved response actions
 --response-webhook-token  optional bearer token for response webhook
 ```
@@ -164,6 +169,8 @@ Useful endpoints:
 --api-token            legacy admin token, defaults to OATD_API_TOKEN
 --alert-webhook-url    optional SIEM/webhook URL for new alerts
 --alert-webhook-token  optional bearer token for alert webhook
+--ticket-webhook-url   optional webhook URL for incident ticket creation
+--ticket-webhook-token optional bearer token for ticket webhook
 --response-webhook-url optional webhook URL for approved response actions
 --response-webhook-token optional bearer token for response webhook
 ```

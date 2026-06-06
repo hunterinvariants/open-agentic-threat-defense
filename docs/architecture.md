@@ -81,6 +81,10 @@ as requiring approval before any execution backend can act on them. Approved
 actions can be exported to an external webhook transport, which keeps the
 execution gate outside the core service.
 
+Planned incident-ticket actions are exported immediately to a separate ticket
+connector so operators get a traceable incident record even when a containment
+step still needs approval.
+
 ### Dashboard
 
 `web/` provides an operational dashboard for assets, alerts, events, policies,
@@ -105,6 +109,9 @@ events are first-class store records and are persisted to Postgres table
 
 When `--alert-webhook-url` is set, newly created alerts are sent to that
 endpoint as `oadtd.alerts` JSON payloads.
+
+When `--ticket-webhook-url` is set, planned incident-ticket actions are sent as
+`oadtd.incident_ticket` payloads.
 
 When `--response-webhook-url` is set, approved response actions are exported as
 `oadtd.response_action` payloads after approval.
