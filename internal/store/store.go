@@ -39,7 +39,8 @@ func (s *Store) ListEvents() []domain.Event {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	events := append([]domain.Event(nil), s.events...)
+	events := make([]domain.Event, len(s.events))
+	copy(events, s.events)
 	sort.Slice(events, func(i, j int) bool {
 		return events[i].Timestamp.After(events[j].Timestamp)
 	})
@@ -72,7 +73,8 @@ func (s *Store) ListAlerts() []domain.Alert {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	alerts := append([]domain.Alert(nil), s.alerts...)
+	alerts := make([]domain.Alert, len(s.alerts))
+	copy(alerts, s.alerts)
 	sort.Slice(alerts, func(i, j int) bool {
 		return alerts[i].CreatedAt.After(alerts[j].CreatedAt)
 	})
@@ -103,7 +105,8 @@ func (s *Store) ListActions() []domain.ResponseAction {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	actions := append([]domain.ResponseAction(nil), s.actions...)
+	actions := make([]domain.ResponseAction, len(s.actions))
+	copy(actions, s.actions)
 	sort.Slice(actions, func(i, j int) bool {
 		return actions[i].CreatedAt.After(actions[j].CreatedAt)
 	})
