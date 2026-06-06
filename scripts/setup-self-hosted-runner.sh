@@ -79,13 +79,17 @@ if [ -z "${registration_token:-}" ]; then
   exit 1
 fi
 
-sudo -u "$runner_user" "$runner_dir/config.sh" \
-  --url "$repo_url" \
-  --token "$registration_token" \
-  --name "$runner_name" \
-  --labels "$runner_labels" \
-  --unattended \
-  --replace
+if [ -f "$runner_dir/.runner" ]; then
+  echo "Runner is already configured; skipping config.sh"
+else
+  sudo -u "$runner_user" "$runner_dir/config.sh" \
+    --url "$repo_url" \
+    --token "$registration_token" \
+    --name "$runner_name" \
+    --labels "$runner_labels" \
+    --unattended \
+    --replace
+fi
 
 cat >/etc/sudoers.d/oadtd-runner <<'EOF'
 runner ALL=(root) NOPASSWD: /usr/bin/install, /bin/ln, /bin/rm, /bin/chown, /bin/systemctl, /usr/bin/journalctl
