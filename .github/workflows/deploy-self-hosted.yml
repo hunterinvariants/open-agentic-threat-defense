@@ -1,6 +1,8 @@
 name: deploy-self-hosted
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       ref:
@@ -24,6 +26,10 @@ env:
 
 permissions:
   contents: read
+
+concurrency:
+  group: deploy-self-hosted-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   deploy:
