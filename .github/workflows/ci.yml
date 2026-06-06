@@ -5,12 +5,55 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: oadtd
+          POSTGRES_USER: oadtd
+          POSTGRES_PASSWORD: oadtd
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U oadtd -d oadtd"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      OATD_TEST_POSTGRES_DSN: postgres://oadtd:oadtd@localhost:5432/oadtd?sslmode=disable
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25.x"
+      - run: go mod download
+      - run: go vet ./...
       - run: go test ./...
+
+  build:
+    runs-on: ubuntu-latest
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        goos: [linux, windows]
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+      - name: Build binaries
+        shell: bash
+        run: |
+          suffix=""
+          if [ "${{ matrix.goos }}" = "windows" ]; then suffix=".exe"; fi
+          mkdir -p dist
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -o "dist/oadtd-${{ matrix.goos }}-${{ matrix.goarch }}${suffix}" ./cmd/oadtd
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -o "dist/oadtdctl-${{ matrix.goos }}-${{ matrix.goarch }}${suffix}" ./cmd/oadtdctl

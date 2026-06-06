@@ -1,5 +1,7 @@
 # Open Agentic Threat Defense
 
+[![ci](https://github.com/hunterinvariants/open-agentic-threat-defense/actions/workflows/ci.yml/badge.svg)](https://github.com/hunterinvariants/open-agentic-threat-defense/actions/workflows/ci.yml)
+
 Open Agentic Threat Defense is a defensive control plane for detecting and
 containing agentic threat behavior across AI-agent tool calls, host telemetry,
 network egress, deception signals, and response workflows.
@@ -75,6 +77,9 @@ $env:GOCACHE="$PWD\.cache\go-build"
 $env:GOMODCACHE="$PWD\.cache\go-mod"
 go test ./...
 ```
+
+GitHub CI runs the same test suite with a real Postgres service and builds
+Linux/Windows binaries for `amd64` and `arm64`.
 
 Run the optional Postgres integration test:
 
