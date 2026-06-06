@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"sort"
 	"sync"
@@ -221,6 +222,16 @@ func (s *Store) LastPersistenceError() string {
 	defer s.mu.RUnlock()
 
 	return s.lastErr
+}
+
+func (s *Store) Ping(ctx context.Context) error {
+	s.mu.RLock()
+	db := s.db
+	s.mu.RUnlock()
+	if db == nil {
+		return nil
+	}
+	return db.PingContext(ctx)
 }
 
 func (s *Store) SchemaVersion() int {

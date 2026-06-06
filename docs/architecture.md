@@ -16,7 +16,8 @@ signals that are often handled separately:
 ### HTTP Service
 
 `cmd/oadtd` starts a local HTTP service and serves both API endpoints and the
-static dashboard.
+static dashboard. The service also exposes `GET /healthz` and `GET /readyz`
+for process and Postgres readiness checks.
 
 ### Replay Client
 
@@ -41,6 +42,8 @@ ranked assets. For production, `--postgres-dsn` stores data in Postgres tables
 with JSONB payloads and indexed core columns. Schema changes are applied through
 versioned migrations recorded in `oatd_schema_migrations`. For local
 development, `--data` writes a JSON snapshot and restores state on startup.
+`oadtdctl backup` and `oadtdctl restore` reuse the same snapshot shape for
+portable Postgres backups.
 
 ### Policy Engine
 

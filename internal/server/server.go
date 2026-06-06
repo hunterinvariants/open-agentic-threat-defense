@@ -93,6 +93,8 @@ func NewWithOptions(options Options) (*App, error) {
 
 func (a *App) Routes() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", a.handleHealth)
+	mux.HandleFunc("/readyz", a.handleReady)
 	mux.HandleFunc("/api/status", a.handleStatus)
 	mux.HandleFunc("/api/session", a.handleSession)
 	mux.HandleFunc("/api/events", a.handleEvents)
@@ -136,6 +138,35 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 		SchemaVersion:    a.store.SchemaVersion(),
 		LastStorageError: a.store.LastPersistenceError(),
 		LastExportError:  a.lastExportError(),
+	})
+}
+
+func (a *App) handleHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":      true,
+		"version": Version,
+	})
+}
+
+func (a *App) handleReady(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	if err := a.store.Ping(ctx); err != nil {
+		writeError(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":             true,
+		"storage_mode":   a.store.PersistenceMode(),
+		"schema_version": a.store.SchemaVersion(),
 	})
 }
 

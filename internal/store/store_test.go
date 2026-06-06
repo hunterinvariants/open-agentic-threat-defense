@@ -97,6 +97,30 @@ func TestStorePersistsAndLoadsAuditSnapshot(t *testing.T) {
 	}
 }
 
+func TestStoreExportsAndRestoresSnapshot(t *testing.T) {
+	s := New()
+	event := domain.Event{
+		ID:        "evt-1",
+		Timestamp: time.Now().UTC(),
+		Kind:      domain.EventFinding,
+		AssetID:   "asset-1",
+		Hostname:  "asset-1",
+	}
+	if err := s.AddEvent(event); err != nil {
+		t.Fatalf("add event: %v", err)
+	}
+	snap := s.ExportSnapshot()
+
+	restored := New()
+	if err := restored.RestoreSnapshot(snap); err != nil {
+		t.Fatalf("restore snapshot: %v", err)
+	}
+	events, alerts, assets, actions, audits := restored.Counts()
+	if events != 1 || alerts != 0 || assets != 1 || actions != 0 || audits != 0 {
+		t.Fatalf("unexpected restored counts: events=%d alerts=%d assets=%d actions=%d audits=%d", events, alerts, assets, actions, audits)
+	}
+}
+
 func TestStoreSkipsDuplicateAlertFingerprintsAfterLoad(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
 	s, err := NewWithPath(path)

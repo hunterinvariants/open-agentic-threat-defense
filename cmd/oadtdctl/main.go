@@ -16,6 +16,7 @@ import (
 	"github.com/open-agentic-threat-defense/oadtd/internal/auth"
 	"github.com/open-agentic-threat-defense/oadtd/internal/collectors"
 	"github.com/open-agentic-threat-defense/oadtd/internal/domain"
+	"github.com/open-agentic-threat-defense/oadtd/internal/store"
 	"github.com/open-agentic-threat-defense/oadtd/internal/telemetry"
 )
 
@@ -33,6 +34,14 @@ func main() {
 		}
 	case "replay":
 		if err := replay(os.Args[2:]); err != nil {
+			log.Fatal(err)
+		}
+	case "backup":
+		if err := backup(os.Args[2:]); err != nil {
+			log.Fatal(err)
+		}
+	case "restore":
+		if err := restore(os.Args[2:]); err != nil {
 			log.Fatal(err)
 		}
 	case "token-hash":
@@ -150,6 +159,79 @@ func replay(args []string) error {
 	return nil
 }
 
+func backup(args []string) error {
+	fs := flag.NewFlagSet("backup", flag.ContinueOnError)
+	dsn := fs.String("postgres-dsn", os.Getenv("OATD_POSTGRES_DSN"), "Postgres DSN")
+	outputPath := fs.String("output", "-", "backup JSON file, or - for stdout")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *dsn == "" {
+		return errors.New("backup requires --postgres-dsn or OATD_POSTGRES_DSN")
+	}
+
+	st, err := store.NewWithPostgres(*dsn)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+
+	snap := st.ExportSnapshot()
+	output, closeOutput, err := openOutput(*outputPath)
+	if err != nil {
+		return err
+	}
+	defer closeOutput()
+
+	encoder := json.NewEncoder(output)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(snap); err != nil {
+		return err
+	}
+	if *outputPath != "-" {
+		fmt.Printf("backup=%s version=%d events=%d alerts=%d actions=%d audits=%d\n", *outputPath, snap.Version, len(snap.Events), len(snap.Alerts), len(snap.Actions), len(snap.Audits))
+	}
+	return nil
+}
+
+func restore(args []string) error {
+	fs := flag.NewFlagSet("restore", flag.ContinueOnError)
+	dsn := fs.String("postgres-dsn", os.Getenv("OATD_POSTGRES_DSN"), "Postgres DSN")
+	inputPath := fs.String("input", "", "backup JSON file, or - for stdin")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *dsn == "" {
+		return errors.New("restore requires --postgres-dsn or OATD_POSTGRES_DSN")
+	}
+	if *inputPath == "" {
+		return errors.New("restore requires --input")
+	}
+
+	input, closeInput, err := openInput(*inputPath)
+	if err != nil {
+		return err
+	}
+	defer closeInput()
+
+	var snap store.Snapshot
+	if err := json.NewDecoder(input).Decode(&snap); err != nil {
+		return err
+	}
+
+	st, err := store.NewWithPostgres(*dsn)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+
+	if err := st.RestoreSnapshot(snap); err != nil {
+		return err
+	}
+	fmt.Printf("restored version=%d events=%d alerts=%d actions=%d audits=%d\n", snap.Version, len(snap.Events), len(snap.Alerts), len(snap.Actions), len(snap.Audits))
+	return nil
+}
+
 func readEvents(filePath string) ([]domain.Event, error) {
 	input, closeInput, err := openInput(filePath)
 	if err != nil {
@@ -220,5 +302,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "usage:")
 	fmt.Fprintln(os.Stderr, "  oadtdctl collect --source suricata-eve --file eve.json --output events.jsonl")
 	fmt.Fprintln(os.Stderr, "  oadtdctl replay --file events.jsonl [--url http://localhost:8080] [--token TOKEN]")
+	fmt.Fprintln(os.Stderr, "  oadtdctl backup --postgres-dsn DSN --output backup.json")
+	fmt.Fprintln(os.Stderr, "  oadtdctl restore --postgres-dsn DSN --input backup.json")
 	fmt.Fprintln(os.Stderr, "  oadtdctl token-hash --token TOKEN")
 }

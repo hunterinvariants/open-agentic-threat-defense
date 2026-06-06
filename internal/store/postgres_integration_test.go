@@ -86,6 +86,10 @@ func TestPostgresPersistenceIntegration(t *testing.T) {
 	if err := s.AddAudit(audit); err != nil {
 		t.Fatalf("add audit: %v", err)
 	}
+	snap := s.ExportSnapshot()
+	if err := s.RestoreSnapshot(snap); err != nil {
+		t.Fatalf("restore snapshot: %v", err)
+	}
 
 	loaded, err := NewWithPostgres(dsn)
 	if err != nil {

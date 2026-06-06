@@ -349,6 +349,27 @@ ON CONFLICT (id) DO UPDATE SET
 	return s.postgresPersistAssetsLocked(ctx)
 }
 
+func postgresInsertEventsTx(ctx context.Context, tx *sql.Tx, events []domain.Event) error {
+	for _, event := range events {
+		data, err := json.Marshal(event)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO oatd_events (id, occurred_at, asset_id, kind, data)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (id) DO UPDATE SET
+  occurred_at = EXCLUDED.occurred_at,
+  asset_id = EXCLUDED.asset_id,
+  kind = EXCLUDED.kind,
+  data = EXCLUDED.data`,
+			event.ID, nullableTime(event.Timestamp), event.AssetID, string(event.Kind), data); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Store) postgresPersistAlertsLocked(alerts []domain.Alert) error {
 	ctx, cancel := context.WithTimeout(context.Background(), postgresTimeout)
 	defer cancel()
@@ -374,6 +395,29 @@ ON CONFLICT (id) DO UPDATE SET
 	return s.postgresPersistAssetsLocked(ctx)
 }
 
+func postgresInsertAlertsTx(ctx context.Context, tx *sql.Tx, alerts []domain.Alert) error {
+	for _, alert := range alerts {
+		data, err := json.Marshal(alert)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO oatd_alerts (id, fingerprint, created_at, asset_id, severity, status, data)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT (id) DO UPDATE SET
+  fingerprint = EXCLUDED.fingerprint,
+  created_at = EXCLUDED.created_at,
+  asset_id = EXCLUDED.asset_id,
+  severity = EXCLUDED.severity,
+  status = EXCLUDED.status,
+  data = EXCLUDED.data`,
+			alert.ID, nullEmpty(alert.Fingerprint), nullableTime(alert.CreatedAt), alert.AssetID, string(alert.Severity), string(alert.Status), data); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Store) postgresPersistActionsLocked(actions []domain.ResponseAction) error {
 	ctx, cancel := context.WithTimeout(context.Background(), postgresTimeout)
 	defer cancel()
@@ -383,6 +427,27 @@ func (s *Store) postgresPersistActionsLocked(actions []domain.ResponseAction) er
 			return err
 		}
 		if _, err := s.db.ExecContext(ctx, `
+INSERT INTO oatd_actions (id, created_at, asset_id, approval_status, data)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (id) DO UPDATE SET
+  created_at = EXCLUDED.created_at,
+  asset_id = EXCLUDED.asset_id,
+  approval_status = EXCLUDED.approval_status,
+  data = EXCLUDED.data`,
+			action.ID, nullableTime(action.CreatedAt), action.AssetID, action.ApprovalStatus, data); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func postgresInsertActionsTx(ctx context.Context, tx *sql.Tx, actions []domain.ResponseAction) error {
+	for _, action := range actions {
+		data, err := json.Marshal(action)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `
 INSERT INTO oatd_actions (id, created_at, asset_id, approval_status, data)
 VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (id) DO UPDATE SET
@@ -419,6 +484,30 @@ ON CONFLICT (id) DO UPDATE SET
 	return err
 }
 
+func postgresInsertAuditsTx(ctx context.Context, tx *sql.Tx, audits []domain.AuditEvent) error {
+	for _, event := range audits {
+		data, err := json.Marshal(event)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO oatd_audit_events (id, occurred_at, actor, action, resource_type, resource_id, outcome, data)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+ON CONFLICT (id) DO UPDATE SET
+  occurred_at = EXCLUDED.occurred_at,
+  actor = EXCLUDED.actor,
+  action = EXCLUDED.action,
+  resource_type = EXCLUDED.resource_type,
+  resource_id = EXCLUDED.resource_id,
+  outcome = EXCLUDED.outcome,
+  data = EXCLUDED.data`,
+			event.ID, event.Timestamp, event.Actor, event.Action, event.ResourceType, event.ResourceID, event.Outcome, data); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Store) postgresPersistAssetsLocked(ctx context.Context) error {
 	for _, asset := range s.assets {
 		data, err := json.Marshal(asset)
@@ -426,6 +515,26 @@ func (s *Store) postgresPersistAssetsLocked(ctx context.Context) error {
 			return err
 		}
 		if _, err := s.db.ExecContext(ctx, `
+INSERT INTO oatd_assets (id, last_seen, risk_score, data)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (id) DO UPDATE SET
+  last_seen = EXCLUDED.last_seen,
+  risk_score = EXCLUDED.risk_score,
+  data = EXCLUDED.data`,
+			asset.ID, nullableTime(asset.LastSeen), asset.RiskScore, data); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func postgresInsertAssetsTx(ctx context.Context, tx *sql.Tx, assets map[string]domain.Asset) error {
+	for _, asset := range assets {
+		data, err := json.Marshal(asset)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `
 INSERT INTO oatd_assets (id, last_seen, risk_score, data)
 VALUES ($1, $2, $3, $4)
 ON CONFLICT (id) DO UPDATE SET

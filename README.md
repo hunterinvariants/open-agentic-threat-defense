@@ -84,6 +84,9 @@ Linux/Windows binaries for `amd64` and `arm64`.
 GitHub security automation includes CodeQL analysis and Dependabot updates for
 Go modules and GitHub Actions.
 
+Postgres operators can create and restore portable JSON backups with
+`oadtdctl backup` and `oadtdctl restore`.
+
 Run the optional Postgres integration test:
 
 ```powershell
@@ -126,6 +129,8 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8080/api/events `
 
 Useful endpoints:
 
+- `GET /healthz`
+- `GET /readyz`
 - `GET /api/status`
 - `GET /api/events`
 - `POST /api/events`

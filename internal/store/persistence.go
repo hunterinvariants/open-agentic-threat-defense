@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -12,7 +13,7 @@ import (
 
 const snapshotVersion = 1
 
-type snapshot struct {
+type Snapshot struct {
 	Version int                     `json:"version"`
 	SavedAt time.Time               `json:"saved_at"`
 	Events  []domain.Event          `json:"events"`
@@ -38,7 +39,7 @@ func NewWithPath(path string) (*Store, error) {
 		return nil, err
 	}
 
-	var snap snapshot
+	var snap Snapshot
 	if err := json.Unmarshal(data, &snap); err != nil {
 		return nil, err
 	}
@@ -59,13 +60,14 @@ func NewWithPath(path string) (*Store, error) {
 	return s, nil
 }
 
-func (s *Store) persistLocked() error {
-	if s.path == "" || s.mode == "postgres" {
-		s.lastErr = ""
-		return nil
-	}
+func (s *Store) ExportSnapshot() Snapshot {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.snapshotLocked()
+}
 
-	snap := snapshot{
+func (s *Store) snapshotLocked() Snapshot {
+	return Snapshot{
 		Version: snapshotVersion,
 		SavedAt: time.Now().UTC(),
 		Events:  append([]domain.Event(nil), s.events...),
@@ -74,6 +76,55 @@ func (s *Store) persistLocked() error {
 		Audits:  append([]domain.AuditEvent(nil), s.audits...),
 		Assets:  cloneAssets(s.assets),
 	}
+}
+
+func (s *Store) RestoreSnapshot(snap Snapshot) error {
+	if snap.Version > snapshotVersion {
+		return errors.New("snapshot version is newer than this binary supports")
+	}
+
+	restored := New()
+	restored.events = append([]domain.Event(nil), snap.Events...)
+	restored.alerts = append([]domain.Alert(nil), snap.Alerts...)
+	restored.actions = append([]domain.ResponseAction(nil), snap.Actions...)
+	restored.audits = append([]domain.AuditEvent(nil), snap.Audits...)
+	if snap.Assets != nil {
+		restored.assets = cloneAssets(snap.Assets)
+	} else {
+		restored.rebuildAssetsLocked()
+	}
+	restored.rebuildFingerprintsLocked()
+
+	if restored.db != nil {
+		return errors.New("unexpected db on restored snapshot")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.db != nil {
+		if err := s.postgresRestoreSnapshotLocked(restored.snapshotLocked()); err != nil {
+			return err
+		}
+	}
+
+	s.events = append([]domain.Event(nil), restored.events...)
+	s.alerts = append([]domain.Alert(nil), restored.alerts...)
+	s.actions = append([]domain.ResponseAction(nil), restored.actions...)
+	s.audits = append([]domain.AuditEvent(nil), restored.audits...)
+	s.assets = cloneAssets(restored.assets)
+	s.rebuildFingerprintsLocked()
+	s.lastErr = ""
+	return s.persistLocked()
+}
+
+func (s *Store) persistLocked() error {
+	if s.path == "" || s.mode == "postgres" {
+		s.lastErr = ""
+		return nil
+	}
+
+	snap := s.snapshotLocked()
 
 	data, err := json.MarshalIndent(snap, "", "  ")
 	if err != nil {
@@ -124,6 +175,48 @@ func (s *Store) persistActionsLocked(actions []domain.ResponseAction) error {
 func (s *Store) persistAuditLocked(event domain.AuditEvent) error {
 	if s.db != nil {
 		return s.postgresPersistAuditLocked(event)
+	}
+	return nil
+}
+
+func (s *Store) postgresRestoreSnapshotLocked(snap Snapshot) error {
+	if s.db == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), postgresTimeout)
+	defer cancel()
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+TRUNCATE TABLE oatd_events, oatd_alerts, oatd_actions, oatd_audit_events, oatd_assets`); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := postgresInsertEventsTx(ctx, tx, snap.Events); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := postgresInsertAlertsTx(ctx, tx, snap.Alerts); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := postgresInsertActionsTx(ctx, tx, snap.Actions); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := postgresInsertAuditsTx(ctx, tx, snap.Audits); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := postgresInsertAssetsTx(ctx, tx, snap.Assets); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
 	}
 	return nil
 }

@@ -28,7 +28,7 @@ Status: implemented in this repository.
 
 ## 1-2 Weeks: Alpha
 
-- Postgres backup/restore docs.
+- Postgres backup/restore tooling and docs.
 - Session-based dashboard login on top of token/RBAC API.
 - Policy reload without restart.
 - Signed tool manifests for AI-agent and MCP surfaces.

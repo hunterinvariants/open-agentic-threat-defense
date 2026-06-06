@@ -86,6 +86,17 @@ $env:OATD_TEST_POSTGRES_DSN="postgres://oadtd:oadtd@localhost:5432/oadtd?sslmode
 go test ./internal/store -run TestPostgresPersistenceIntegration -count=1
 ```
 
+Portable backups are JSON snapshots produced by `oadtdctl backup` and restored
+with `oadtdctl restore`:
+
+```powershell
+go run ./cmd/oadtdctl backup --postgres-dsn $env:OATD_POSTGRES_DSN --output backup.json
+go run ./cmd/oadtdctl restore --postgres-dsn $env:OATD_POSTGRES_DSN --input backup.json
+```
+
+The service also exposes `GET /healthz` and `GET /readyz` for process and
+database readiness checks.
+
 ## Audit Log
 
 The service records audit events for authentication failures, RBAC denials,
