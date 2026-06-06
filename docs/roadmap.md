@@ -9,6 +9,7 @@
 - Local dashboard.
 - Optional JSON snapshot persistence.
 - Optional token protection for write endpoints.
+- JSON policy configuration for tool, egress, and correlation-window defaults.
 - AGPLv3-or-later plus commercial dual-license path.
 - CLA requirement from day 1.
 
@@ -18,7 +19,7 @@ Status: implemented in this repository.
 
 - Durable SQLite or Postgres storage.
 - Authenticated API.
-- Configurable policies.
+- Policy reload without restart.
 - Signed tool manifests for AI-agent and MCP surfaces.
 - Collector adapters for Sysmon, auditd, Zeek, Suricata, and proxy logs.
 - Export to SIEM via webhook or JSONL.

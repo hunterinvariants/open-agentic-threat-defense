@@ -42,6 +42,12 @@ $env:OATD_API_TOKEN="replace-with-a-local-secret"
 go run ./cmd/oadtd --demo --data .cache\oadtd-state.json
 ```
 
+Run with an explicit policy configuration:
+
+```powershell
+go run ./cmd/oadtd --demo --policy configs\example.policy.json
+```
+
 Open:
 
 ```text
@@ -103,12 +109,27 @@ Useful endpoints:
 --web        static dashboard directory, default web
 --demo       load safe demo telemetry at startup
 --data       optional JSON snapshot path for local persistence
+--policy     optional JSON policy configuration path
 --api-token  optional token for POST endpoints, defaults to OATD_API_TOKEN
 ```
 
 When `--api-token` or `OATD_API_TOKEN` is set, read endpoints remain available
 for the dashboard and health checks, while write endpoints require
 `Authorization: Bearer <token>` or `X-OATD-Token: <token>`.
+
+## Policy Configuration
+
+The policy file is JSON:
+
+```json
+{
+  "approved_tools": ["asset_inventory", "ticket_create", "policy_read", "siem_search"],
+  "approved_egress_hosts": ["api.openai.com", "github.com", "login.microsoftonline.com"],
+  "correlation_window": "30m"
+}
+```
+
+See [configs/example.policy.json](configs/example.policy.json).
 
 ## License
 

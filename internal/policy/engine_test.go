@@ -42,3 +42,42 @@ func TestEvaluateAllowsApprovedTool(t *testing.T) {
 		}
 	}
 }
+
+func TestEvaluateAllowsConfiguredTool(t *testing.T) {
+	engine := New(Config{
+		ApprovedTools: []string{"shell_exec"},
+	})
+
+	alerts := engine.Evaluate(domain.Event{
+		ID:       "evt-1",
+		Kind:     domain.EventAgentToolCall,
+		AssetID:  "host-1",
+		ToolName: "shell_exec",
+		Command:  "read inventory",
+	})
+
+	for _, alert := range alerts {
+		if alert.RuleID == "agent.tool.unapproved" {
+			t.Fatal("did not expect unapproved tool alert")
+		}
+	}
+}
+
+func TestEvaluateAllowsConfiguredEgressHost(t *testing.T) {
+	engine := New(Config{
+		ApprovedEgressHosts: []string{"example.com"},
+	})
+
+	alerts := engine.Evaluate(domain.Event{
+		ID:          "evt-1",
+		Kind:        domain.EventNetworkFlow,
+		AssetID:     "host-1",
+		Destination: "https://example.com/models",
+	})
+
+	for _, alert := range alerts {
+		if alert.RuleID == "network.egress.unknown" {
+			t.Fatal("did not expect unknown egress alert")
+		}
+	}
+}

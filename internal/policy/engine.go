@@ -14,20 +14,63 @@ type Engine struct {
 	approvedEgressHosts map[string]struct{}
 }
 
-func NewDefault() *Engine {
-	return &Engine{
-		approvedTools: map[string]struct{}{
-			"asset_inventory": {},
-			"ticket_create":   {},
-			"policy_read":     {},
-			"siem_search":     {},
+type Config struct {
+	ApprovedTools       []string
+	ApprovedEgressHosts []string
+}
+
+func DefaultConfig() Config {
+	return Config{
+		ApprovedTools: []string{
+			"asset_inventory",
+			"ticket_create",
+			"policy_read",
+			"siem_search",
 		},
-		approvedEgressHosts: map[string]struct{}{
-			"api.openai.com":            {},
-			"github.com":                {},
-			"login.microsoftonline.com": {},
+		ApprovedEgressHosts: []string{
+			"api.openai.com",
+			"github.com",
+			"login.microsoftonline.com",
 		},
 	}
+}
+
+func NewDefault() *Engine {
+	return New(DefaultConfig())
+}
+
+func New(config Config) *Engine {
+	config = withDefaults(config)
+	approvedTools := make(map[string]struct{}, len(config.ApprovedTools))
+	for _, tool := range config.ApprovedTools {
+		tool = strings.ToLower(strings.TrimSpace(tool))
+		if tool != "" {
+			approvedTools[tool] = struct{}{}
+		}
+	}
+	approvedEgressHosts := make(map[string]struct{}, len(config.ApprovedEgressHosts))
+	for _, host := range config.ApprovedEgressHosts {
+		host = normalizeHost(host)
+		if host != "" {
+			approvedEgressHosts[host] = struct{}{}
+		}
+	}
+
+	return &Engine{
+		approvedTools:       approvedTools,
+		approvedEgressHosts: approvedEgressHosts,
+	}
+}
+
+func withDefaults(config Config) Config {
+	defaults := DefaultConfig()
+	if len(config.ApprovedTools) == 0 {
+		config.ApprovedTools = defaults.ApprovedTools
+	}
+	if len(config.ApprovedEgressHosts) == 0 {
+		config.ApprovedEgressHosts = defaults.ApprovedEgressHosts
+	}
+	return config
 }
 
 func (e *Engine) Rules() []domain.RuleDescriptor {

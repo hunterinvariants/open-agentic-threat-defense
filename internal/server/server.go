@@ -33,9 +33,11 @@ type App struct {
 }
 
 type Options struct {
-	WebDir   string
-	DataPath string
-	APIToken string
+	WebDir            string
+	DataPath          string
+	APIToken          string
+	Policy            policy.Config
+	CorrelationWindow time.Duration
 }
 
 func New(webDir string) *App {
@@ -54,10 +56,13 @@ func NewWithOptions(options Options) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	if options.CorrelationWindow == 0 {
+		options.CorrelationWindow = 30 * time.Minute
+	}
 	return &App{
 		store:      st,
-		policy:     policy.NewDefault(),
-		correlator: correlator.New(30 * time.Minute),
+		policy:     policy.New(options.Policy),
+		correlator: correlator.New(options.CorrelationWindow),
 		responder:  response.NewDryRun(),
 		webDir:     options.WebDir,
 		apiToken:   options.APIToken,

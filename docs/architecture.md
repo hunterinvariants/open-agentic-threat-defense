@@ -41,11 +41,15 @@ leaving room for SQLite or Postgres in the alpha phase.
 - canary or deception hits;
 - suspicious local model runtime activity.
 
+Approved agent tools and egress hosts are configurable through `--policy`.
+If no policy file is supplied, the built-in defaults are used.
+
 ### Correlator
 
 `internal/correlator` joins events over a time window and raises higher
 confidence alerts when discovery, credential touch, agent tool use, and egress
-appear on the same asset.
+appear on the same asset. The window is configurable with
+`correlation_window` in the policy file.
 
 ### Response Planner
 
