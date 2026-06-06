@@ -46,9 +46,11 @@ fi
 runner_tarball="actions-runner-linux-${runner_arch}-${runner_version#v}.tar.gz"
 runner_url="https://github.com/actions/runner/releases/download/${runner_version}/${runner_tarball}"
 tmp_dir="$(mktemp -d)"
+chown "$runner_user:$runner_user" "$tmp_dir"
 trap 'rm -rf "$tmp_dir"' EXIT
 
 curl -fsSL -o "$tmp_dir/$runner_tarball" "$runner_url"
+chown "$runner_user:$runner_user" "$tmp_dir/$runner_tarball"
 sudo -u "$runner_user" tar xzf "$tmp_dir/$runner_tarball" -C "$runner_dir"
 
 if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
