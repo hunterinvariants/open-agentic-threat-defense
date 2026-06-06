@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Open Agentic Threat Defense</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">Open Agentic Threat Defense</p>
+      <h1>Agentic Threat Control Plane</h1>
+    </div>
+    <div class="toolbar">
+      <button id="load-demo" class="primary">Load Demo</button>
+      <button id="refresh">Refresh</button>
+    </div>
+  </header>
+
+  <main class="shell">
+    <section class="metrics" aria-label="System status">
+      <div class="metric">
+        <span class="metric-label">Events</span>
+        <strong id="metric-events">0</strong>
+      </div>
+      <div class="metric">
+        <span class="metric-label">Alerts</span>
+        <strong id="metric-alerts">0</strong>
+      </div>
+      <div class="metric">
+        <span class="metric-label">Assets</span>
+        <strong id="metric-assets">0</strong>
+      </div>
+      <div class="metric">
+        <span class="metric-label">Dry Runs</span>
+        <strong id="metric-actions">0</strong>
+      </div>
+    </section>
+
+    <section class="workspace">
+      <div class="left-column">
+        <section class="panel graph-panel">
+          <div class="panel-header">
+            <h2>Asset Risk Graph</h2>
+            <span id="version" class="muted"></span>
+          </div>
+          <svg id="asset-graph" viewBox="0 0 760 260" role="img" aria-label="Asset risk graph"></svg>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <h2>Assets</h2>
+            <span class="muted">risk-ranked</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Asset</th>
+                  <th>IP</th>
+                  <th>Agent Surface</th>
+                  <th>Risk</th>
+                </tr>
+              </thead>
+              <tbody id="assets-body"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <h2>Event Stream</h2>
+            <span class="muted">latest first</span>
+          </div>
+          <div id="events-list" class="event-list"></div>
+        </section>
+      </div>
+
+      <aside class="right-column">
+        <section class="panel alerts-panel">
+          <div class="panel-header">
+            <h2>Open Alerts</h2>
+            <span class="muted">policy + correlation</span>
+          </div>
+          <div id="alerts-list" class="alert-list"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <h2>Response Actions</h2>
+            <span class="muted">dry-run only</span>
+          </div>
+          <div id="actions-list" class="action-list"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <h2>Rules</h2>
+            <span class="muted">enabled</span>
+          </div>
+          <div id="rules-list" class="rules-list"></div>
+        </section>
+      </aside>
+    </section>
+  </main>
+
+  <template id="empty-template">
+    <div class="empty">No data loaded.</div>
+  </template>
+
+  <script src="/app.js"></script>
+</body>
+</html>
+

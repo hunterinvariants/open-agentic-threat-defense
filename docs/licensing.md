@@ -1,0 +1,38 @@
+# Licensing Model
+
+Open Agentic Threat Defense uses AGPLv3-or-later plus a commercial dual-license
+path.
+
+## Community License
+
+The community version is licensed under AGPL-3.0-or-later. This fits a control
+plane because AGPL includes source-code obligations for network-service use.
+
+## Commercial License
+
+The commercial license path is for organizations that need to avoid AGPL
+obligations or want enterprise terms, closed-source embedding, warranty,
+support, or procurement language.
+
+## CLA From Day 1
+
+External contributions require a CLA before merge so the project owner can keep
+dual-licensing rights clean.
+
+Required operational steps:
+
+- keep a signed CLA record for every external contributor;
+- block PR merge until the CLA is verified;
+- preserve commit attribution;
+- avoid accepting code copied from incompatible licenses;
+- have counsel review the CLA before broad public contribution intake.
+
+## Open Core Direction
+
+Recommended split:
+
+- open core: collectors, policy engine, correlator, local dashboard, safe
+  telemetry simulator, basic response plans;
+- commercial edition: SSO/SAML, RBAC, multi-tenancy, enterprise connectors,
+  central policy distribution, compliance reports, managed rule packs, support.
+
