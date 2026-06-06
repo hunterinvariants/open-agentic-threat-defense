@@ -20,6 +20,8 @@ import (
 	"github.com/open-agentic-threat-defense/oadtd/internal/domain"
 )
 
+const collectorRetryBackoffCap = 1 * time.Minute
+
 type Config struct {
 	Source            string
 	Path              string
@@ -75,13 +77,37 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 
+	consecutiveErrors := 0
 	for {
 		processed, err := processOnce(ctx, cfg, client, &state)
 		if err != nil {
-			return err
+			if cfg.Once {
+				return err
+			}
+			consecutiveErrors++
+			delay := collectorRetryDelay(consecutiveErrors)
+			fmt.Fprintf(os.Stderr, "collector %s error: %v; retrying in %s\n", cfg.Source, err, delay)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(delay):
+			}
+			continue
 		}
+		consecutiveErrors = 0
 		if err := saveState(cfg.StatePath, state); err != nil {
-			return err
+			if cfg.Once {
+				return err
+			}
+			consecutiveErrors++
+			delay := collectorRetryDelay(consecutiveErrors)
+			fmt.Fprintf(os.Stderr, "collector %s state error: %v; retrying in %s\n", cfg.Source, err, delay)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(delay):
+			}
+			continue
 		}
 		if cfg.Once {
 			return nil
@@ -102,6 +128,17 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 }
 
+func collectorRetryDelay(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+	delay := time.Second << (attempt - 1)
+	if delay > collectorRetryBackoffCap {
+		return collectorRetryBackoffCap
+	}
+	return delay
+}
+
 func processOnce(ctx context.Context, cfg Config, client *http.Client, state *State) (int, error) {
 	if isNativeSource(cfg.Source) {
 		return processNativeOnce(ctx, cfg, client, state)
@@ -114,9 +151,11 @@ func processOnce(ctx context.Context, cfg Config, client *http.Client, state *St
 		}
 		return 0, err
 	}
-	if info.Size() < state.Offset {
-		state.Offset = 0
-		state.Remainder = ""
+	offset := state.Offset
+	remainder := state.Remainder
+	if info.Size() < offset {
+		offset = 0
+		remainder = ""
 	}
 
 	file, err := os.Open(cfg.Path)
@@ -125,7 +164,7 @@ func processOnce(ctx context.Context, cfg Config, client *http.Client, state *St
 	}
 	defer file.Close()
 
-	if _, err := file.Seek(state.Offset, io.SeekStart); err != nil {
+	if _, err := file.Seek(offset, io.SeekStart); err != nil {
 		return 0, err
 	}
 	data, err := io.ReadAll(file)
@@ -136,16 +175,16 @@ func processOnce(ctx context.Context, cfg Config, client *http.Client, state *St
 		return 0, nil
 	}
 
-	state.LastSize = info.Size()
-	state.UpdatedAt = time.Now().UTC()
-
-	lines, remainder := splitCompleteLines(state.Remainder + string(data))
-	state.Remainder = remainder
-	state.Offset = info.Size() - int64(len(state.Remainder))
-	if state.Offset < 0 {
-		state.Offset = 0
+	lines, nextRemainder := splitCompleteLines(remainder + string(data))
+	nextOffset := info.Size() - int64(len(nextRemainder))
+	if nextOffset < 0 {
+		nextOffset = 0
 	}
 	if len(lines) == 0 {
+		state.LastSize = info.Size()
+		state.UpdatedAt = time.Now().UTC()
+		state.Remainder = nextRemainder
+		state.Offset = nextOffset
 		return len(data), nil
 	}
 
@@ -154,18 +193,27 @@ func processOnce(ctx context.Context, cfg Config, client *http.Client, state *St
 		return 0, err
 	}
 	if len(events) == 0 {
+		state.LastSize = info.Size()
+		state.UpdatedAt = time.Now().UTC()
+		state.Remainder = nextRemainder
+		state.Offset = nextOffset
 		return len(data), nil
 	}
 	if err := postEvents(ctx, client, cfg.BaseURL, cfg.Token, cfg.BatchSize, events); err != nil {
 		return 0, err
 	}
+	state.LastSize = info.Size()
+	state.UpdatedAt = time.Now().UTC()
+	state.Remainder = nextRemainder
+	state.Offset = nextOffset
 	return len(events), nil
 }
 
 func processNativeOnce(ctx context.Context, cfg Config, client *http.Client, state *State) (int, error) {
 	switch cfg.Source {
 	case "windows-eventlog":
-		events, err := collectWindowsEventLog(ctx, cfg, state)
+		nextState := *state
+		events, err := collectWindowsEventLog(ctx, cfg, &nextState)
 		if err != nil {
 			return 0, err
 		}
@@ -175,9 +223,11 @@ func processNativeOnce(ctx context.Context, cfg Config, client *http.Client, sta
 		if err := postEvents(ctx, client, cfg.BaseURL, cfg.Token, cfg.BatchSize, events); err != nil {
 			return 0, err
 		}
+		*state = nextState
 		return len(events), nil
 	case "journald":
-		events, err := collectJournalctl(ctx, cfg, state)
+		nextState := *state
+		events, err := collectJournalctl(ctx, cfg, &nextState)
 		if err != nil {
 			return 0, err
 		}
@@ -187,6 +237,7 @@ func processNativeOnce(ctx context.Context, cfg Config, client *http.Client, sta
 		if err := postEvents(ctx, client, cfg.BaseURL, cfg.Token, cfg.BatchSize, events); err != nil {
 			return 0, err
 		}
+		*state = nextState
 		return len(events), nil
 	default:
 		return 0, fmt.Errorf("unsupported native collector source %q", cfg.Source)

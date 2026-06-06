@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -84,5 +85,45 @@ func TestParseJournalRecords(t *testing.T) {
 	}
 	if state.Cursor != "cursor-1" {
 		t.Fatalf("expected cursor-1, got %s", state.Cursor)
+	}
+}
+
+func TestRunRetriesTransientPostFailure(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "sysmon.jsonl")
+	statePath := filepath.Join(dir, "agent-state.json")
+	if err := os.WriteFile(logPath, []byte(`{"EventID":"1","Computer":"host-1","UtcTime":"2026-06-06T10:00:00Z","EventData":{"Image":"cmd.exe","CommandLine":"whoami"}}`+"\n"), 0o600); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+
+	var attempts int
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`temporary failure`))
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	err := Run(ctx, Config{
+		Source:       "sysmon-json",
+		Path:         logPath,
+		BaseURL:      server.URL,
+		BatchSize:    10,
+		PollInterval: 10 * time.Millisecond,
+		StatePath:    statePath,
+		Client:       server.Client(),
+	})
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected deadline exceeded after retry loop, got %v", err)
+	}
+	if attempts < 2 {
+		t.Fatalf("expected retry after failure, got %d attempts", attempts)
 	}
 }
