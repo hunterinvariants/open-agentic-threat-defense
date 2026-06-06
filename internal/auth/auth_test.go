@@ -20,6 +20,37 @@ func TestAuthenticateUserToken(t *testing.T) {
 	}
 }
 
+func TestSessionLoginAndAuthenticate(t *testing.T) {
+	a := New([]UserConfig{{Name: "alice", TokenHash: HashToken("secret"), Roles: []string{RoleOperator}}}, "")
+	info, sessionID, ok := a.Login("alice", "secret")
+	if !ok {
+		t.Fatal("expected login to succeed")
+	}
+	if info.Principal.Name != "alice" || info.ExpiresAt.IsZero() {
+		t.Fatalf("unexpected session info: %#v", info)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/status", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: sessionID})
+
+	session, ok := a.Session(req)
+	if !ok || session.Principal.Name != "alice" {
+		t.Fatalf("unexpected session lookup: %#v", session)
+	}
+
+	principal, ok := a.Authenticate(req)
+	if !ok || principal.Name != "alice" {
+		t.Fatalf("unexpected authenticated principal: %#v", principal)
+	}
+
+	if !a.Logout(req) {
+		t.Fatal("expected logout to remove session")
+	}
+	if _, ok := a.Session(req); ok {
+		t.Fatal("expected session to be removed")
+	}
+}
+
 func TestRequiredRoles(t *testing.T) {
 	if roles := RequiredRoles(http.MethodPost, "/api/responses/approve"); len(roles) != 1 || roles[0] != RoleOperator {
 		t.Fatalf("unexpected approve roles: %#v", roles)

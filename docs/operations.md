@@ -116,3 +116,29 @@ Generate a hash:
 ```powershell
 .\oadtdctl.exe token-hash --token "replace-with-secret-token"
 ```
+
+## Dashboard Login
+
+The dashboard uses a session cookie instead of storing bearer tokens in the
+browser.
+
+Login:
+
+```http
+POST /api/session
+Content-Type: application/json
+
+{"username":"admin","token":"replace-with-secret-token"}
+```
+
+Check the current session:
+
+```http
+GET /api/session
+```
+
+Logout:
+
+```http
+DELETE /api/session
+```

@@ -119,6 +119,63 @@ func TestRBACBlocksAuditForViewer(t *testing.T) {
 	}
 }
 
+func TestSessionLoginAndLogout(t *testing.T) {
+	app, err := NewWithOptions(Options{
+		Users: []auth.UserConfig{{Name: "alice", TokenHash: auth.HashToken("secret"), Roles: []string{auth.RoleOperator}}},
+	})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+
+	loginReq := httptest.NewRequest(http.MethodPost, "/api/session", strings.NewReader(`{"username":"alice","token":"secret"}`))
+	loginRec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(loginRec, loginReq)
+	if loginRec.Code != http.StatusAccepted {
+		t.Fatalf("expected login 202, got %d: %s", loginRec.Code, loginRec.Body.String())
+	}
+	var loginPayload struct {
+		Authenticated bool   `json:"authenticated"`
+		Mode          string `json:"mode"`
+		Principal     struct {
+			Name string `json:"name"`
+		} `json:"principal"`
+	}
+	if err := json.Unmarshal(loginRec.Body.Bytes(), &loginPayload); err != nil {
+		t.Fatalf("decode login: %v", err)
+	}
+	if !loginPayload.Authenticated || loginPayload.Mode != "session" || loginPayload.Principal.Name != "alice" {
+		t.Fatalf("unexpected login payload: %#v", loginPayload)
+	}
+	cookies := loginRec.Result().Cookies()
+	if len(cookies) == 0 {
+		t.Fatal("expected session cookie")
+	}
+
+	statusReq := httptest.NewRequest(http.MethodGet, "/api/status", nil)
+	statusReq.AddCookie(cookies[0])
+	statusRec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(statusRec, statusReq)
+	if statusRec.Code != http.StatusOK {
+		t.Fatalf("expected authenticated status 200, got %d", statusRec.Code)
+	}
+
+	logoutReq := httptest.NewRequest(http.MethodDelete, "/api/session", nil)
+	logoutReq.AddCookie(cookies[0])
+	logoutRec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(logoutRec, logoutReq)
+	if logoutRec.Code != http.StatusOK {
+		t.Fatalf("expected logout 200, got %d", logoutRec.Code)
+	}
+
+	statusReq = httptest.NewRequest(http.MethodGet, "/api/status", nil)
+	statusReq.AddCookie(cookies[0])
+	statusRec = httptest.NewRecorder()
+	app.Routes().ServeHTTP(statusRec, statusReq)
+	if statusRec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 after logout, got %d", statusRec.Code)
+	}
+}
+
 func TestEmptyListEndpointsReturnArrays(t *testing.T) {
 	app, err := NewWithOptions(Options{})
 	if err != nil {

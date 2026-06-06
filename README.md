@@ -24,7 +24,7 @@ malware behavior, or autonomous propagation. Demo data generates telemetry only.
   planning, and response approvals.
 - `oadtdctl replay` for safe JSONL telemetry replay into the ingest API.
 - Browser dashboard with asset risk graph, alerts, events, rules, and response
-  actions.
+  actions, plus session-based dashboard login.
 - Alert webhook export for SIEM-style integrations.
 - systemd and Windows service starter packaging.
 - AGPLv3-or-later community license, commercial dual-license path, and CLA from
@@ -155,6 +155,10 @@ When users are configured in the policy file, all API endpoints require
 `Authorization: Bearer <token>` or `X-OATD-Token: <token>` and are checked
 against RBAC roles. `--api-token` remains a legacy admin-token compatibility
 path.
+
+The dashboard uses `POST /api/session` to exchange a configured user name and
+token for a session cookie. `GET /api/session` reports the current dashboard
+state and `DELETE /api/session` logs out.
 
 ## Policy Configuration
 

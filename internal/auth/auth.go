@@ -1,11 +1,14 @@
 package auth
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 )
 
 const (
@@ -27,13 +30,25 @@ type Principal struct {
 	Roles []string `json:"roles"`
 }
 
+type SessionInfo struct {
+	Principal Principal `json:"principal"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
 type Authenticator struct {
 	users      []UserConfig
 	legacyHash string
+	sessionMu  sync.RWMutex
+	sessions   map[string]SessionInfo
+	sessionTTL time.Duration
 }
 
 func New(users []UserConfig, legacyToken string) *Authenticator {
-	authenticator := &Authenticator{users: normalizeUsers(users)}
+	authenticator := &Authenticator{
+		users:      normalizeUsers(users),
+		sessions:   make(map[string]SessionInfo),
+		sessionTTL: 12 * time.Hour,
+	}
 	if legacyToken != "" {
 		authenticator.legacyHash = HashToken(legacyToken)
 	}
@@ -54,20 +69,71 @@ func (a *Authenticator) HasUsers() bool {
 }
 
 func (a *Authenticator) Authenticate(r *http.Request) (Principal, bool) {
+	if principal, ok := a.authenticateSession(r); ok {
+		return principal, true
+	}
 	token := readToken(r)
 	if token == "" {
 		return Principal{}, false
 	}
 	tokenHash := HashToken(token)
-	for _, user := range a.users {
-		if constantTimeEqual(tokenHash, user.TokenHash) {
-			return Principal{Name: user.Name, Roles: user.Roles}, true
-		}
-	}
-	if a.legacyHash != "" && constantTimeEqual(tokenHash, a.legacyHash) {
-		return Principal{Name: "legacy-token", Roles: []string{RoleAdmin}}, true
+	principal, ok := a.principalForToken(tokenHash)
+	if ok {
+		return principal, true
 	}
 	return Principal{}, false
+}
+
+func (a *Authenticator) Login(username string, token string) (SessionInfo, string, bool) {
+	principal, ok := a.principalForCredentials(username, token)
+	if !ok {
+		return SessionInfo{}, "", false
+	}
+	sessionID := randomSessionID()
+	if sessionID == "" {
+		return SessionInfo{}, "", false
+	}
+	info := SessionInfo{
+		Principal: principal,
+		ExpiresAt: time.Now().UTC().Add(a.sessionTTL),
+	}
+	a.sessionMu.Lock()
+	a.sessions[sessionID] = info
+	a.sessionMu.Unlock()
+	return info, sessionID, true
+}
+
+func (a *Authenticator) Session(r *http.Request) (SessionInfo, bool) {
+	sessionID := readSessionID(r)
+	if sessionID == "" {
+		return SessionInfo{}, false
+	}
+	a.sessionMu.RLock()
+	info, ok := a.sessions[sessionID]
+	a.sessionMu.RUnlock()
+	if !ok || time.Now().UTC().After(info.ExpiresAt) {
+		if ok {
+			a.sessionMu.Lock()
+			delete(a.sessions, sessionID)
+			a.sessionMu.Unlock()
+		}
+		return SessionInfo{}, false
+	}
+	return info, true
+}
+
+func (a *Authenticator) Logout(r *http.Request) bool {
+	sessionID := readSessionID(r)
+	if sessionID == "" {
+		return false
+	}
+	a.sessionMu.Lock()
+	defer a.sessionMu.Unlock()
+	if _, ok := a.sessions[sessionID]; !ok {
+		return false
+	}
+	delete(a.sessions, sessionID)
+	return true
 }
 
 func (p Principal) HasAny(roles ...string) bool {
@@ -79,6 +145,31 @@ func (p Principal) HasAny(roles ...string) bool {
 		}
 	}
 	return false
+}
+
+func (a *Authenticator) SetSessionCookie(w http.ResponseWriter, sessionID string, expiresAt time.Time, secure bool) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookieName,
+		Value:    sessionID,
+		Path:     "/",
+		Expires:  expiresAt,
+		MaxAge:   int(time.Until(expiresAt).Seconds()),
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+func (a *Authenticator) ClearSessionCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookieName,
+		Value:    "",
+		Path:     "/",
+		Expires:  time.Unix(0, 0),
+		MaxAge:   -1,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
 }
 
 func RequiredRoles(method string, path string) []string {
@@ -134,6 +225,34 @@ func normalizeRoles(roles []string) []string {
 	return normalized
 }
 
+func (a *Authenticator) principalForCredentials(username string, token string) (Principal, bool) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return Principal{}, false
+	}
+	tokenHash := HashToken(token)
+	username = strings.TrimSpace(username)
+	if principal, ok := a.principalForToken(tokenHash); ok {
+		if username != "" && !strings.EqualFold(username, principal.Name) && principal.Name != "legacy-token" {
+			return Principal{}, false
+		}
+		return principal, true
+	}
+	return Principal{}, false
+}
+
+func (a *Authenticator) principalForToken(tokenHash string) (Principal, bool) {
+	for _, user := range a.users {
+		if constantTimeEqual(tokenHash, user.TokenHash) {
+			return Principal{Name: user.Name, Roles: user.Roles}, true
+		}
+	}
+	if a.legacyHash != "" && constantTimeEqual(tokenHash, a.legacyHash) {
+		return Principal{Name: "legacy-token", Roles: []string{RoleAdmin}}, true
+	}
+	return Principal{}, false
+}
+
 func readToken(r *http.Request) string {
 	header := r.Header.Get("Authorization")
 	if strings.HasPrefix(strings.ToLower(header), "bearer ") {
@@ -141,6 +260,32 @@ func readToken(r *http.Request) string {
 	}
 	return strings.TrimSpace(r.Header.Get("X-OATD-Token"))
 }
+
+func readSessionID(r *http.Request) string {
+	cookie, err := r.Cookie(sessionCookieName)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(cookie.Value)
+}
+
+func (a *Authenticator) authenticateSession(r *http.Request) (Principal, bool) {
+	info, ok := a.Session(r)
+	if !ok {
+		return Principal{}, false
+	}
+	return info.Principal, true
+}
+
+func randomSessionID() string {
+	var raw [32]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(raw[:])
+}
+
+const sessionCookieName = "oatd_session"
 
 func constantTimeEqual(got string, want string) bool {
 	if got == "" || want == "" {

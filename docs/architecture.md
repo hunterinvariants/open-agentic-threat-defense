@@ -74,7 +74,9 @@ as requiring approval before any future execution backend can act on them.
 ### Dashboard
 
 `web/` provides an operational dashboard for assets, alerts, events, policies,
-and dry-run response actions.
+and dry-run response actions. The browser uses `POST /api/session` to create a
+session cookie and `GET /api/session` to restore its authenticated state on
+reload.
 
 ### Authentication And RBAC
 

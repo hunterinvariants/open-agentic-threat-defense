@@ -1,7 +1,16 @@
 const els = {
+  loginView: document.querySelector("#login-view"),
+  appView: document.querySelector("#app-view"),
+  loginForm: document.querySelector("#login-form"),
+  loginUsername: document.querySelector("#login-username"),
+  loginToken: document.querySelector("#login-token"),
+  loginError: document.querySelector("#login-error"),
+  loginSubmit: document.querySelector("#login-submit"),
+  sessionLabel: document.querySelector("#session-label"),
   version: document.querySelector("#version"),
   loadDemo: document.querySelector("#load-demo"),
   refresh: document.querySelector("#refresh"),
+  logout: document.querySelector("#logout"),
   metrics: {
     events: document.querySelector("#metric-events"),
     alerts: document.querySelector("#metric-alerts"),
@@ -18,37 +27,119 @@ const els = {
 };
 
 const emptyTemplate = document.querySelector("#empty-template");
+const state = {
+  session: null,
+  pollHandle: null
+};
 
 async function api(path, options = {}) {
-  const headers = { "Content-Type": "application/json" };
-  const token = sessionStorage.getItem("oatd_api_token");
+  const { useToken = true, ...fetchOptions } = options;
+  const headers = {
+    "Content-Type": "application/json",
+    ...(fetchOptions.headers || {})
+  };
+  const token = useToken ? sessionStorage.getItem("oatd_api_token") : "";
   if (token) {
     headers.Authorization = `Bearer ${token}`;
   }
 
   const response = await fetch(path, {
-    headers,
-    ...options
+    credentials: "same-origin",
+    ...fetchOptions,
+    headers
   });
-  if (response.status === 401 && isWrite(options.method)) {
-    const nextToken = window.prompt("API token");
-    if (nextToken) {
-      sessionStorage.setItem("oatd_api_token", nextToken);
-      return api(path, options);
-    }
-  }
+  const bodyText = await response.text();
+  const payload = bodyText ? tryParseJSON(bodyText) : null;
   if (!response.ok) {
-    const payload = await response.json().catch(() => ({}));
-    throw new Error(payload.error || `${response.status} ${response.statusText}`);
+    const error = new Error((payload && payload.error) || `${response.status} ${response.statusText}`);
+    error.status = response.status;
+    error.payload = payload;
+    throw error;
   }
-  return response.json();
+  return payload;
 }
 
-function isWrite(method = "GET") {
-  return !["GET", "HEAD", "OPTIONS"].includes(method.toUpperCase());
+function tryParseJSON(value) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+function isLoggedIn() {
+  return Boolean(state.session && state.session.authenticated);
+}
+
+function setView(session) {
+  state.session = session;
+  const loggedIn = isLoggedIn();
+  document.body.classList.toggle("logged-out", !loggedIn);
+  els.loginView.hidden = loggedIn;
+  els.appView.hidden = !loggedIn;
+  if (loggedIn) {
+    const principal = session.principal || {};
+    const mode = session.mode || "session";
+    const roles = Array.isArray(principal.roles) ? principal.roles.join(", ") : "";
+    els.sessionLabel.textContent = roles ? `${principal.name} - ${mode} - ${roles}` : `${principal.name} - ${mode}`;
+  } else {
+    els.sessionLabel.textContent = "";
+  }
+}
+
+function showLogin(message = "") {
+  stopPolling();
+  setView({ authenticated: false });
+  els.loginError.textContent = message;
+  els.loginSubmit.disabled = false;
+  els.loginForm.reset();
+  els.loginUsername.focus();
+}
+
+function showApp(session) {
+  els.loginError.textContent = "";
+  setView(session);
+  startPolling();
+}
+
+function startPolling() {
+  stopPolling();
+  state.pollHandle = window.setInterval(() => {
+    refresh().catch(handleApiFailure);
+  }, 8000);
+}
+
+function stopPolling() {
+  if (state.pollHandle !== null) {
+    window.clearInterval(state.pollHandle);
+    state.pollHandle = null;
+  }
+}
+
+function handleApiFailure(error) {
+  if (error && error.status === 401) {
+    sessionStorage.removeItem("oatd_api_token");
+    showLogin("Session expired.");
+    return;
+  }
+  console.error(error);
+}
+
+async function loadSession() {
+  const session = await api("/api/session");
+  if (session && session.authenticated) {
+    showApp(session);
+    return true;
+  }
+  showLogin();
+  return false;
 }
 
 async function refresh() {
+  if (!isLoggedIn()) {
+    return;
+  }
+
   const [status, alerts, assets, events, actions, rules] = await Promise.all([
     api("/api/status"),
     api("/api/alerts"),
@@ -221,10 +312,11 @@ function renderGraph(assets, alerts) {
     .map((node) => `<line x1="${width / 2}" y1="${height / 2}" x2="${node.cx}" y2="${node.cy}" stroke="#d9ded6" stroke-width="2" />`)
     .join("");
 
-  const circles = nodes.map((node) => {
-    const name = escapeHtml(node.asset.hostname || node.asset.id);
-    const risk = Math.min(99, node.asset.risk_score || 0);
-    return `
+  const circles = nodes
+    .map((node) => {
+      const name = escapeHtml(node.asset.hostname || node.asset.id);
+      const risk = Math.min(99, node.asset.risk_score || 0);
+      return `
       <g>
         <circle cx="${node.cx}" cy="${node.cy}" r="${28 + Math.min(18, risk / 6)}" fill="${node.fill}" opacity="0.95"></circle>
         <text x="${node.cx}" y="${node.cy + 4}" text-anchor="middle" fill="#fff" font-size="13" font-weight="800">${risk}</text>
@@ -232,7 +324,8 @@ function renderGraph(assets, alerts) {
         <text x="${node.cx}" y="${node.cy + 68}" text-anchor="middle" fill="#647067" font-size="11">${node.alerts} alerts</text>
       </g>
     `;
-  }).join("");
+    })
+    .join("");
 
   els.graph.innerHTML = `
     <rect x="0" y="0" width="${width}" height="${height}" fill="#fbfcfa"></rect>
@@ -269,17 +362,67 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+async function login(username, token) {
+  const session = await api("/api/session", {
+    method: "POST",
+    useToken: false,
+    body: JSON.stringify({ username, token })
+  });
+  sessionStorage.removeItem("oatd_api_token");
+  showApp(session);
+  await refresh();
+}
+
+async function logout() {
+  try {
+    await api("/api/session", {
+      method: "DELETE",
+      useToken: false
+    });
+  } catch (error) {
+    handleApiFailure(error);
+  }
+  sessionStorage.removeItem("oatd_api_token");
+  showLogin();
+}
+
+els.loginForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  els.loginSubmit.disabled = true;
+  els.loginError.textContent = "";
+  try {
+    await login(els.loginUsername.value, els.loginToken.value);
+  } catch (error) {
+    if (error && error.status === 401) {
+      els.loginError.textContent = "Invalid credentials.";
+      return;
+    }
+    handleApiFailure(error);
+    els.loginError.textContent = "Login failed.";
+  } finally {
+    els.loginSubmit.disabled = false;
+  }
+});
+
+els.logout.addEventListener("click", () => {
+  logout().catch(handleApiFailure);
+});
+
 els.loadDemo.addEventListener("click", async () => {
   els.loadDemo.disabled = true;
   try {
     await api("/api/demo", { method: "POST", body: "{}" });
     await refresh();
+  } catch (error) {
+    handleApiFailure(error);
   } finally {
     els.loadDemo.disabled = false;
   }
 });
 
-els.refresh.addEventListener("click", refresh);
+els.refresh.addEventListener("click", () => {
+  refresh().catch(handleApiFailure);
+});
 
 els.alertsList.addEventListener("click", async (event) => {
   const button = event.target.closest("[data-respond]");
@@ -291,6 +434,8 @@ els.alertsList.addEventListener("click", async (event) => {
       body: JSON.stringify({ alert_id: button.dataset.respond })
     });
     await refresh();
+  } catch (error) {
+    handleApiFailure(error);
   } finally {
     button.disabled = false;
   }
@@ -306,15 +451,23 @@ els.actionsList.addEventListener("click", async (event) => {
       body: JSON.stringify({ action_id: button.dataset.approve, approved_by: "dashboard" })
     });
     await refresh();
+  } catch (error) {
+    handleApiFailure(error);
   } finally {
     button.disabled = false;
   }
 });
 
-refresh().catch((error) => {
-  console.error(error);
+els.loginUsername.addEventListener("input", () => {
+  els.loginError.textContent = "";
 });
 
-setInterval(() => {
-  refresh().catch((error) => console.error(error));
-}, 8000);
+els.loginToken.addEventListener("input", () => {
+  els.loginError.textContent = "";
+});
+
+loadSession().then((loggedIn) => {
+  if (loggedIn) {
+    refresh().catch(handleApiFailure);
+  }
+}).catch(handleApiFailure);

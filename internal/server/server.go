@@ -94,6 +94,7 @@ func NewWithOptions(options Options) (*App, error) {
 func (a *App) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/status", a.handleStatus)
+	mux.HandleFunc("/api/session", a.handleSession)
 	mux.HandleFunc("/api/events", a.handleEvents)
 	mux.HandleFunc("/api/alerts", a.handleAlerts)
 	mux.HandleFunc("/api/assets", a.handleAssets)
@@ -136,6 +137,104 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 		LastStorageError: a.store.LastPersistenceError(),
 		LastExportError:  a.lastExportError(),
 	})
+}
+
+func (a *App) handleSession(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		if a.auth == nil || !a.auth.Enabled() {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"authenticated": true,
+				"mode":          "open",
+				"principal": auth.Principal{
+					Name:  "anonymous",
+					Roles: []string{auth.RoleAdmin},
+				},
+			})
+			return
+		}
+		if info, ok := a.auth.Session(r); ok {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"authenticated": true,
+				"mode":          "session",
+				"principal":     info.Principal,
+				"expires_at":    info.ExpiresAt,
+			})
+			return
+		}
+		if principal, ok := a.auth.Authenticate(r); ok {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"authenticated": true,
+				"mode":          "token",
+				"principal":     principal,
+			})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"authenticated": false,
+		})
+	case http.MethodPost:
+		if a.auth == nil || !a.auth.Enabled() {
+			writeJSON(w, http.StatusAccepted, map[string]any{
+				"authenticated": true,
+				"mode":          "open",
+				"principal": auth.Principal{
+					Name:  "anonymous",
+					Roles: []string{auth.RoleAdmin},
+				},
+			})
+			return
+		}
+		var req struct {
+			Username string `json:"username"`
+			Token    string `json:"token"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		info, sessionID, ok := a.auth.Login(req.Username, req.Token)
+		if !ok {
+			a.recordAudit(r, auth.Principal{Name: "anonymous"}, "auth.login", "session", "", "denied", map[string]string{
+				"username": strings.TrimSpace(req.Username),
+			})
+			writeError(w, http.StatusUnauthorized, errors.New("invalid credentials"))
+			return
+		}
+		a.auth.SetSessionCookie(w, sessionID, info.ExpiresAt, r.TLS != nil)
+		a.recordAudit(r, info.Principal, "auth.login", "session", "", "accepted", map[string]string{
+			"mode": "session",
+		})
+		writeJSON(w, http.StatusAccepted, map[string]any{
+			"authenticated": true,
+			"mode":          "session",
+			"principal":     info.Principal,
+			"expires_at":    info.ExpiresAt,
+		})
+	case http.MethodDelete:
+		if a.auth == nil || !a.auth.Enabled() {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"authenticated": true,
+				"mode":          "open",
+				"principal": auth.Principal{
+					Name:  "anonymous",
+					Roles: []string{auth.RoleAdmin},
+				},
+			})
+			return
+		}
+		info, ok := a.auth.Session(r)
+		if ok {
+			a.recordAudit(r, info.Principal, "auth.logout", "session", "", "accepted", nil)
+			_ = a.auth.Logout(r)
+		}
+		a.auth.ClearSessionCookie(w)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"authenticated": false,
+		})
+	default:
+		methodNotAllowed(w)
+	}
 }
 
 func (a *App) handleEvents(w http.ResponseWriter, r *http.Request) {
@@ -474,7 +573,7 @@ func withSecurityHeaders(next http.Handler) http.Handler {
 
 func (a *App) withAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasPrefix(r.URL.Path, "/api/") || a.auth == nil || !a.auth.Enabled() {
+		if !strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api/session" || a.auth == nil || !a.auth.Enabled() {
 			next.ServeHTTP(w, r)
 			return
 		}
