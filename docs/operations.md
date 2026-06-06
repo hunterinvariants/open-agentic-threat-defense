@@ -72,6 +72,53 @@ environment secrets:
 The target user must be able to restart `oadtd` through `sudo` without an
 interactive password prompt.
 
+## GitHub Self-hosted Runner
+
+For a local Ubuntu VM staging environment, the repository includes a
+`deploy-self-hosted.yml` workflow that runs on a GitHub Actions self-hosted
+runner installed on the VM itself. This avoids SSH hops and tests the exact
+release swap used in production.
+
+Expected runner labels:
+
+- `self-hosted`
+- `linux`
+- `x64`
+- `oadtd-staging`
+
+Suggested one-time runner setup on the VM:
+
+```bash
+sudo useradd --system --create-home --home-dir /opt/actions-runner --shell /bin/bash runner
+sudo mkdir -p /opt/actions-runner
+sudo chown runner:runner /opt/actions-runner
+```
+
+Then download the GitHub Actions runner from the repository settings page,
+configure it with the `oadtd-staging` label, and install it as a service under
+the `runner` user.
+
+The runner user needs passwordless sudo for the deployment steps:
+
+```bash
+sudo visudo -f /etc/sudoers.d/oadtd-runner
+```
+
+Add:
+
+```text
+runner ALL=(root) NOPASSWD: /usr/bin/install, /bin/ln, /bin/rm, /bin/chown, /bin/systemctl, /usr/bin/journalctl
+```
+
+After the runner is online, trigger the workflow manually from GitHub and it
+will:
+
+- build the Linux binaries
+- install them under `/opt/oadtd/releases/<sha>`
+- repoint `/opt/oadtd/current`
+- restart `oadtd`
+- verify `GET /readyz`
+
 ## Windows Service
 
 Build or download `oadtd.exe`, place it at `C:\Program Files\OATD\oadtd.exe`,
