@@ -90,7 +90,21 @@ CREATE TABLE IF NOT EXISTS oatd_assets (
   last_seen TIMESTAMPTZ,
   risk_score INTEGER,
   data JSONB NOT NULL
-);`)
+);
+
+CREATE TABLE IF NOT EXISTS oatd_audit_events (
+  id TEXT PRIMARY KEY,
+  occurred_at TIMESTAMPTZ NOT NULL,
+  actor TEXT,
+  action TEXT NOT NULL,
+  resource_type TEXT,
+  resource_id TEXT,
+  outcome TEXT,
+  data JSONB NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_oatd_audit_events_occurred_at ON oatd_audit_events (occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_oatd_audit_events_actor ON oatd_audit_events (actor);
+CREATE INDEX IF NOT EXISTS idx_oatd_audit_events_action ON oatd_audit_events (action);`)
 	return err
 }
 
@@ -105,6 +119,9 @@ func (s *Store) postgresLoad(ctx context.Context) error {
 		return err
 	}
 	if err := s.postgresLoadAssets(ctx); err != nil {
+		return err
+	}
+	if err := s.postgresLoadAudits(ctx); err != nil {
 		return err
 	}
 	s.rebuildFingerprintsLocked()
@@ -196,6 +213,26 @@ func (s *Store) postgresLoadAssets(ctx context.Context) error {
 	return rows.Err()
 }
 
+func (s *Store) postgresLoadAudits(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `SELECT data FROM oatd_audit_events ORDER BY occurred_at ASC, id ASC`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var data []byte
+		if err := rows.Scan(&data); err != nil {
+			return err
+		}
+		var event domain.AuditEvent
+		if err := json.Unmarshal(data, &event); err != nil {
+			return err
+		}
+		s.audits = append(s.audits, event)
+	}
+	return rows.Err()
+}
+
 func (s *Store) postgresPersistEventLocked(event domain.Event) error {
 	ctx, cancel := context.WithTimeout(context.Background(), postgresTimeout)
 	defer cancel()
@@ -263,6 +300,28 @@ ON CONFLICT (id) DO UPDATE SET
 		}
 	}
 	return nil
+}
+
+func (s *Store) postgresPersistAuditLocked(event domain.AuditEvent) error {
+	ctx, cancel := context.WithTimeout(context.Background(), postgresTimeout)
+	defer cancel()
+	data, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `
+INSERT INTO oatd_audit_events (id, occurred_at, actor, action, resource_type, resource_id, outcome, data)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+ON CONFLICT (id) DO UPDATE SET
+  occurred_at = EXCLUDED.occurred_at,
+  actor = EXCLUDED.actor,
+  action = EXCLUDED.action,
+  resource_type = EXCLUDED.resource_type,
+  resource_id = EXCLUDED.resource_id,
+  outcome = EXCLUDED.outcome,
+  data = EXCLUDED.data`,
+		event.ID, event.Timestamp, event.Actor, event.Action, event.ResourceType, event.ResourceID, event.Outcome, data)
+	return err
 }
 
 func (s *Store) postgresPersistAssetsLocked(ctx context.Context) error {

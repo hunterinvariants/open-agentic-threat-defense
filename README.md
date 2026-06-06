@@ -18,6 +18,8 @@ malware behavior, or autonomous propagation. Demo data generates telemetry only.
 - Dry-run response planner for host isolation, egress blocking, tool disabling,
   ticket creation, and secret rotation.
 - User/token authentication with role-based access control.
+- Audit log for authentication failures, RBAC denials, ingestion, response
+  planning, and response approvals.
 - `oadtdctl replay` for safe JSONL telemetry replay into the ingest API.
 - Browser dashboard with asset risk graph, alerts, events, rules, and response
   actions.
@@ -41,6 +43,7 @@ go run ./cmd/oadtd --demo
 Run with Postgres persistence:
 
 ```powershell
+docker compose up -d postgres
 $env:OATD_POSTGRES_DSN="postgres://oadtd:oadtd@localhost:5432/oadtd?sslmode=disable"
 go run ./cmd/oadtd --demo --policy configs\example.policy.json
 ```
@@ -71,6 +74,14 @@ $env:GOTELEMETRY="off"
 $env:GOCACHE="$PWD\.cache\go-build"
 $env:GOMODCACHE="$PWD\.cache\go-mod"
 go test ./...
+```
+
+Run the optional Postgres integration test:
+
+```powershell
+docker compose up -d postgres
+$env:OATD_TEST_POSTGRES_DSN="postgres://oadtd:oadtd@localhost:5432/oadtd?sslmode=disable"
+go test ./internal/store -run TestPostgresPersistenceIntegration -count=1
 ```
 
 Replay safe JSONL telemetry into a running server:
@@ -112,6 +123,7 @@ Useful endpoints:
 - `POST /api/events`
 - `GET /api/alerts`
 - `GET /api/assets`
+- `GET /api/audit`
 - `GET /api/policies`
 - `GET /api/responses`
 - `POST /api/responses`
@@ -171,6 +183,8 @@ Roles:
 - `analyst`: read API access, ingestion, and response planning.
 - `operator`: analyst permissions plus response approvals.
 - `admin`: all API operations.
+
+Audit logs require `analyst`, `operator`, or `admin`.
 
 ## Telemetry Replay
 

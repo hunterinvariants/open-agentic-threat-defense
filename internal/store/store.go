@@ -16,6 +16,7 @@ type Store struct {
 	events       []domain.Event
 	alerts       []domain.Alert
 	actions      []domain.ResponseAction
+	audits       []domain.AuditEvent
 	assets       map[string]domain.Asset
 	fingerprints map[string]struct{}
 	path         string
@@ -152,6 +153,30 @@ func (s *Store) ListActions() []domain.ResponseAction {
 	return actions
 }
 
+func (s *Store) AddAudit(event domain.AuditEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.audits = append(s.audits, event)
+	if err := s.persistAuditLocked(event); err != nil {
+		s.lastErr = err.Error()
+		return err
+	}
+	return s.persistLocked()
+}
+
+func (s *Store) ListAudits() []domain.AuditEvent {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	audits := make([]domain.AuditEvent, len(s.audits))
+	copy(audits, s.audits)
+	sort.Slice(audits, func(i, j int) bool {
+		return audits[i].Timestamp.After(audits[j].Timestamp)
+	})
+	return audits
+}
+
 func (s *Store) ListAssets() []domain.Asset {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -169,11 +194,11 @@ func (s *Store) ListAssets() []domain.Asset {
 	return assets
 }
 
-func (s *Store) Counts() (events int, alerts int, assets int, actions int) {
+func (s *Store) Counts() (events int, alerts int, assets int, actions int, audits int) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return len(s.events), len(s.alerts), len(s.assets), len(s.actions)
+	return len(s.events), len(s.alerts), len(s.assets), len(s.actions), len(s.audits)
 }
 
 func (s *Store) PersistencePath() string {

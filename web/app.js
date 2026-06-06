@@ -6,7 +6,8 @@ const els = {
     events: document.querySelector("#metric-events"),
     alerts: document.querySelector("#metric-alerts"),
     assets: document.querySelector("#metric-assets"),
-    actions: document.querySelector("#metric-actions")
+    actions: document.querySelector("#metric-actions"),
+    audit: document.querySelector("#metric-audit")
   },
   graph: document.querySelector("#asset-graph"),
   assetsBody: document.querySelector("#assets-body"),
@@ -71,6 +72,7 @@ function renderStatus(status) {
   els.metrics.alerts.textContent = status.alert_count;
   els.metrics.assets.textContent = status.asset_count;
   els.metrics.actions.textContent = status.action_count;
+  els.metrics.audit.textContent = status.audit_count;
   els.version.textContent = status.version;
 }
 
@@ -114,7 +116,7 @@ function renderAlerts(alerts) {
         <div class="item-title">${escapeHtml(alert.title)}</div>
         <span class="badge severity-${alert.severity}">${escapeHtml(alert.severity)}</span>
       </div>
-      <div class="item-meta">${escapeHtml(alert.asset_id || "unknown asset")} · ${escapeHtml(alert.rule_id)}</div>
+      <div class="item-meta">${escapeHtml(alert.asset_id || "unknown asset")} - ${escapeHtml(alert.rule_id)}</div>
       <p class="item-body">${escapeHtml(alert.description)}</p>
       <div class="kv">${renderEvidence(alert.evidence)}</div>
       <div class="item-top action-row">
@@ -141,7 +143,7 @@ function renderEvents(events) {
         <div class="item-title">${escapeHtml(event.kind)}</div>
         <span class="chip">${escapeHtml(event.asset_id || "no asset")}</span>
       </div>
-      <div class="item-meta">${formatTime(event.timestamp)} · ${escapeHtml(event.hostname || event.source_ip || "-")}</div>
+      <div class="item-meta">${formatTime(event.timestamp)} - ${escapeHtml(event.hostname || event.source_ip || "-")}</div>
       <p class="item-body">${escapeHtml(event.signal || event.command || event.destination || "-")}</p>
       <div class="kv">${(event.labels || []).map((label) => `<span class="chip">${escapeHtml(label)}</span>`).join("")}</div>
     `;
@@ -164,7 +166,7 @@ function renderActions(actions) {
         <div class="item-title">${escapeHtml(action.type)}</div>
         <span class="chip">${escapeHtml(action.approval_status || action.mode)}</span>
       </div>
-      <div class="item-meta">${escapeHtml(action.asset_id || "unknown asset")} · ${escapeHtml(action.target || "-")}</div>
+      <div class="item-meta">${escapeHtml(action.asset_id || "unknown asset")} - ${escapeHtml(action.target || "-")}</div>
       <p class="item-body">${escapeHtml(action.reason || "")}</p>
       ${action.approval_status === "required" ? `<div class="item-top action-row"><span class="item-meta">approval required</span><button class="small" data-approve="${escapeHtml(action.id)}">Approve</button></div>` : ""}
     `;

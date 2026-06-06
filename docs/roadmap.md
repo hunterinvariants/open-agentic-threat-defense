@@ -15,6 +15,9 @@
 - Collector normalizers for Sysmon JSON, auditd, Zeek conn, and Suricata EVE.
 - Alert webhook export.
 - Response approval state for planned actions.
+- Audit logging for authentication, RBAC, ingestion, planning, and approval
+  events.
+- Docker Compose Postgres service plus optional Postgres integration test.
 - systemd and Windows service starter packaging.
 - AGPLv3-or-later plus commercial dual-license path.
 - CLA requirement from day 1.
@@ -23,7 +26,7 @@ Status: implemented in this repository.
 
 ## 1-2 Weeks: Alpha
 
-- Postgres migrations hardening and backup/restore docs.
+- Postgres migration versioning and backup/restore docs.
 - Session-based dashboard login on top of token/RBAC API.
 - Policy reload without restart.
 - Signed tool manifests for AI-agent and MCP surfaces.
@@ -40,7 +43,7 @@ Status: implemented in this repository.
 - Policy packs.
 - Deception token registry.
 - Response approvals.
-- Integration tests with replayed telemetry.
+- Integration tests with replayed telemetry and Postgres-backed API smoke tests.
 - Windows and Linux packaging.
 - Better asset graph and investigation timeline.
 
@@ -49,7 +52,7 @@ Status: implemented in this repository.
 - Hardening review.
 - Threat model.
 - Signed releases.
-- Audit logging.
+- Tamper-evident audit log export.
 - Enterprise connectors.
 - SSO/SAML for the commercial edition.
 - Commercial license workflow.

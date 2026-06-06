@@ -104,6 +104,20 @@ type Asset struct {
 	Metadata     map[string]string `json:"metadata"`
 }
 
+type AuditEvent struct {
+	ID           string            `json:"id"`
+	Timestamp    time.Time         `json:"timestamp"`
+	Actor        string            `json:"actor"`
+	Roles        []string          `json:"roles"`
+	Action       string            `json:"action"`
+	ResourceType string            `json:"resource_type"`
+	ResourceID   string            `json:"resource_id,omitempty"`
+	Outcome      string            `json:"outcome"`
+	SourceIP     string            `json:"source_ip,omitempty"`
+	UserAgent    string            `json:"user_agent,omitempty"`
+	Metadata     map[string]string `json:"metadata"`
+}
+
 type RuleDescriptor struct {
 	ID          string   `json:"id"`
 	Name        string   `json:"name"`
@@ -119,6 +133,7 @@ type Status struct {
 	AlertCount       int       `json:"alert_count"`
 	AssetCount       int       `json:"asset_count"`
 	ActionCount      int       `json:"action_count"`
+	AuditCount       int       `json:"audit_count"`
 	StartedAt        time.Time `json:"started_at"`
 	StorageMode      string    `json:"storage_mode"`
 	StoragePath      string    `json:"storage_path,omitempty"`

@@ -24,4 +24,7 @@ func TestRequiredRoles(t *testing.T) {
 	if roles := RequiredRoles(http.MethodPost, "/api/responses/approve"); len(roles) != 1 || roles[0] != RoleOperator {
 		t.Fatalf("unexpected approve roles: %#v", roles)
 	}
+	if roles := RequiredRoles(http.MethodGet, "/api/audit"); len(roles) != 2 || roles[0] != RoleAnalyst || roles[1] != RoleOperator {
+		t.Fatalf("unexpected audit roles: %#v", roles)
+	}
 }

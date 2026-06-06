@@ -24,6 +24,13 @@ For production, set Postgres in `/etc/oadtd/oadtd.env`:
 OATD_POSTGRES_DSN=postgres://oadtd:oadtd@postgres:5432/oadtd?sslmode=disable
 ```
 
+For local development and integration tests, start the bundled Compose service:
+
+```powershell
+docker compose up -d postgres
+$env:OATD_POSTGRES_DSN="postgres://oadtd:oadtd@localhost:5432/oadtd?sslmode=disable"
+```
+
 Create a dedicated user, copy the binaries and policy file, install the unit,
 then enable it:
 
@@ -67,6 +74,23 @@ Production durable storage is Postgres via `--postgres-dsn` or
 
 The local JSON snapshot configured with `--data` remains useful for development
 and quick labs, but it is not the production storage path.
+
+The optional Postgres integration test is disabled by default and runs only when
+`OATD_TEST_POSTGRES_DSN` is set:
+
+```powershell
+$env:OATD_TEST_POSTGRES_DSN="postgres://oadtd:oadtd@localhost:5432/oadtd?sslmode=disable"
+go test ./internal/store -run TestPostgresPersistenceIntegration -count=1
+```
+
+## Audit Log
+
+The service records audit events for authentication failures, RBAC denials,
+event ingestion, demo loads, response planning, and response approvals. Audit
+events are stored in Postgres table `oatd_audit_events` in production mode and
+are exposed through `GET /api/audit`.
+
+`GET /api/audit` requires `analyst`, `operator`, or `admin`.
 
 ## RBAC
 

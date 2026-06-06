@@ -31,15 +31,15 @@ Suricata EVE JSON.
 
 ### Domain Model
 
-`internal/domain` defines the shared event, alert, asset, rule, and response
-types.
+`internal/domain` defines the shared event, alert, asset, rule, response, and
+audit event types.
 
 ### Store
 
-`internal/store` keeps events, alerts, response actions, and risk ranked assets.
-For production, `--postgres-dsn` stores data in Postgres tables with JSONB
-payloads and indexed core columns. For local development, `--data` writes a JSON
-snapshot and restores state on startup.
+`internal/store` keeps events, alerts, response actions, audit events, and risk
+ranked assets. For production, `--postgres-dsn` stores data in Postgres tables
+with JSONB payloads and indexed core columns. For local development, `--data`
+writes a JSON snapshot and restores state on startup.
 
 ### Policy Engine
 
@@ -81,6 +81,13 @@ API access supports user tokens with RBAC roles configured in the policy file.
 Token values are not stored in config; only SHA-256 token hashes are stored.
 The legacy `--api-token` path behaves as an admin token for compatibility.
 
+### Audit Logging
+
+The HTTP layer records audit events for authentication failures, RBAC denials,
+event ingestion, demo loads, response planning, and response approvals. Audit
+events are first-class store records and are persisted to Postgres table
+`oatd_audit_events` in production mode.
+
 ### SIEM/Webhook Export
 
 When `--alert-webhook-url` is set, newly created alerts are sent to that
@@ -102,6 +109,8 @@ flowchart LR
   F --> G["Response Orchestrator"]
   G --> H["SIEM/EDR/Firewall/Ticketing"]
   F --> I["Dashboard"]
+  B --> J["Audit Log"]
+  G --> J
 ```
 
 The current file-backed snapshot should be treated as local development storage,

@@ -82,6 +82,9 @@ func (p Principal) HasAny(roles ...string) bool {
 }
 
 func RequiredRoles(method string, path string) []string {
+	if path == "/api/audit" {
+		return []string{RoleAnalyst, RoleOperator}
+	}
 	if method == http.MethodGet || method == http.MethodHead || method == http.MethodOptions {
 		return []string{RoleViewer, RoleAnalyst, RoleOperator, RoleIngestor}
 	}

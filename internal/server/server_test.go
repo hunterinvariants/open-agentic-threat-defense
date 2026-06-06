@@ -98,6 +98,27 @@ func TestRBACBlocksInsufficientRole(t *testing.T) {
 	}
 }
 
+func TestRBACBlocksAuditForViewer(t *testing.T) {
+	app, err := NewWithOptions(Options{
+		Users: []auth.UserConfig{{Name: "viewer", TokenHash: auth.HashToken("view-token"), Roles: []string{auth.RoleViewer}}},
+	})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/audit", nil)
+	req.Header.Set("Authorization", "Bearer view-token")
+	rec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", rec.Code)
+	}
+	audits := app.store.ListAudits()
+	if len(audits) != 1 || audits[0].Action != "auth.authorize" || audits[0].Outcome != "denied" {
+		t.Fatalf("unexpected audit log: %#v", audits)
+	}
+}
+
 func TestEmptyListEndpointsReturnArrays(t *testing.T) {
 	app, err := NewWithOptions(Options{})
 	if err != nil {
@@ -167,6 +188,20 @@ func TestResponseApprovalEndpoint(t *testing.T) {
 	}
 	if approved.ApprovalStatus != "approved" || approved.ApprovedBy != "alice" {
 		t.Fatalf("unexpected approval response: %#v", approved)
+	}
+	audits := app.store.ListAudits()
+	if len(audits) == 0 {
+		t.Fatal("expected audit events")
+	}
+	foundApproval := false
+	for _, audit := range audits {
+		if audit.Action == "responses.approve" && audit.ResourceID == actionID && audit.Outcome == "accepted" {
+			foundApproval = true
+			break
+		}
+	}
+	if !foundApproval {
+		t.Fatalf("expected response approval audit event, got %#v", audits)
 	}
 }
 

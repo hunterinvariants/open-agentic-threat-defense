@@ -57,12 +57,43 @@ func TestStorePersistsAndLoadsSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load store: %v", err)
 	}
-	events, alerts, assets, actions := loaded.Counts()
-	if events != 1 || alerts != 1 || assets != 1 || actions != 1 {
-		t.Fatalf("unexpected counts: events=%d alerts=%d assets=%d actions=%d", events, alerts, assets, actions)
+	events, alerts, assets, actions, audits := loaded.Counts()
+	if events != 1 || alerts != 1 || assets != 1 || actions != 1 || audits != 0 {
+		t.Fatalf("unexpected counts: events=%d alerts=%d assets=%d actions=%d audits=%d", events, alerts, assets, actions, audits)
 	}
 	if loaded.LastPersistenceError() != "" {
 		t.Fatalf("unexpected persistence error: %s", loaded.LastPersistenceError())
+	}
+}
+
+func TestStorePersistsAndLoadsAuditSnapshot(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	s, err := NewWithPath(path)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+
+	audit := domain.AuditEvent{
+		ID:           "aud-1",
+		Timestamp:    time.Now().UTC(),
+		Actor:        "alice",
+		Action:       "responses.approve",
+		ResourceType: "response_action",
+		ResourceID:   "act-1",
+		Outcome:      "accepted",
+		Metadata:     map[string]string{"asset_id": "asset-1"},
+	}
+	if err := s.AddAudit(audit); err != nil {
+		t.Fatalf("add audit: %v", err)
+	}
+
+	loaded, err := NewWithPath(path)
+	if err != nil {
+		t.Fatalf("load store: %v", err)
+	}
+	audits := loaded.ListAudits()
+	if len(audits) != 1 || audits[0].Actor != "alice" || audits[0].Action != "responses.approve" {
+		t.Fatalf("unexpected audit events: %#v", audits)
 	}
 }
 

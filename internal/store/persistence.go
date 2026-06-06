@@ -18,6 +18,7 @@ type snapshot struct {
 	Events  []domain.Event          `json:"events"`
 	Alerts  []domain.Alert          `json:"alerts"`
 	Actions []domain.ResponseAction `json:"actions"`
+	Audits  []domain.AuditEvent     `json:"audits"`
 	Assets  map[string]domain.Asset `json:"assets"`
 }
 
@@ -48,6 +49,7 @@ func NewWithPath(path string) (*Store, error) {
 	s.events = append([]domain.Event(nil), snap.Events...)
 	s.alerts = append([]domain.Alert(nil), snap.Alerts...)
 	s.actions = append([]domain.ResponseAction(nil), snap.Actions...)
+	s.audits = append([]domain.AuditEvent(nil), snap.Audits...)
 	if snap.Assets != nil {
 		s.assets = snap.Assets
 	} else {
@@ -69,6 +71,7 @@ func (s *Store) persistLocked() error {
 		Events:  append([]domain.Event(nil), s.events...),
 		Alerts:  append([]domain.Alert(nil), s.alerts...),
 		Actions: append([]domain.ResponseAction(nil), s.actions...),
+		Audits:  append([]domain.AuditEvent(nil), s.audits...),
 		Assets:  cloneAssets(s.assets),
 	}
 
@@ -114,6 +117,13 @@ func (s *Store) persistAlertsLocked(alerts []domain.Alert) error {
 func (s *Store) persistActionsLocked(actions []domain.ResponseAction) error {
 	if s.db != nil {
 		return s.postgresPersistActionsLocked(actions)
+	}
+	return nil
+}
+
+func (s *Store) persistAuditLocked(event domain.AuditEvent) error {
+	if s.db != nil {
+		return s.postgresPersistAuditLocked(event)
 	}
 	return nil
 }

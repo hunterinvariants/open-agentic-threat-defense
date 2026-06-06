@@ -1,10 +1,12 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -95,6 +97,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("/api/events", a.handleEvents)
 	mux.HandleFunc("/api/alerts", a.handleAlerts)
 	mux.HandleFunc("/api/assets", a.handleAssets)
+	mux.HandleFunc("/api/audit", a.handleAudit)
 	mux.HandleFunc("/api/responses/approve", a.handleResponseApproval)
 	mux.HandleFunc("/api/responses", a.handleResponses)
 	mux.HandleFunc("/api/policies", a.handlePolicies)
@@ -117,7 +120,7 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	events, alerts, assets, actions := a.store.Counts()
+	events, alerts, assets, actions, audits := a.store.Counts()
 	writeJSON(w, http.StatusOK, domain.Status{
 		Version:          Version,
 		UptimeSeconds:    int64(time.Since(a.startedAt).Seconds()),
@@ -125,6 +128,7 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 		AlertCount:       alerts,
 		AssetCount:       assets,
 		ActionCount:      actions,
+		AuditCount:       audits,
 		StartedAt:        a.startedAt,
 		StorageMode:      a.store.PersistenceMode(),
 		StoragePath:      a.store.PersistencePath(),
@@ -148,6 +152,10 @@ func (a *App) handleEvents(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
+		a.recordAudit(r, principalFromRequest(r), "events.ingest", "events", "", "accepted", map[string]string{
+			"events": fmt.Sprintf("%d", len(events)),
+			"alerts": fmt.Sprintf("%d", len(alerts)),
+		})
 		writeJSON(w, http.StatusAccepted, map[string]any{
 			"events_ingested": len(events),
 			"alerts_created":  len(alerts),
@@ -172,6 +180,14 @@ func (a *App) handleAssets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, a.store.ListAssets())
+}
+
+func (a *App) handleAudit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	writeJSON(w, http.StatusOK, a.store.ListAudits())
 }
 
 func (a *App) handlePolicies(w http.ResponseWriter, r *http.Request) {
@@ -211,6 +227,15 @@ func (a *App) handleResponseApproval(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, errors.New("action not found"))
 		return
 	}
+	principal := principalFromRequest(r)
+	if principal.Name == "" {
+		principal.Name = req.ApprovedBy
+	}
+	a.recordAudit(r, principal, "responses.approve", "response_action", action.ID, "accepted", map[string]string{
+		"approved_by": req.ApprovedBy,
+		"asset_id":    action.AssetID,
+		"action_type": action.Type,
+	})
 	writeJSON(w, http.StatusAccepted, action)
 }
 
@@ -243,6 +268,9 @@ func (a *App) handleResponses(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
+		a.recordAudit(r, principalFromRequest(r), "responses.plan", "alert", alert.ID, "accepted", map[string]string{
+			"actions": fmt.Sprintf("%d", len(actions)),
+		})
 		writeJSON(w, http.StatusAccepted, actions)
 	default:
 		methodNotAllowed(w)
@@ -259,6 +287,9 @@ func (a *App) handleDemo(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	a.recordAudit(r, principalFromRequest(r), "demo.load", "demo", "", "accepted", map[string]string{
+		"alerts": fmt.Sprintf("%d", len(alerts)),
+	})
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"alerts_created": len(alerts),
 		"alerts":         alerts,
@@ -327,6 +358,29 @@ func (a *App) prepareAction(action *domain.ResponseAction) {
 
 func (a *App) nextID(prefix string) string {
 	return fmt.Sprintf("%s-%d", prefix, a.counter.Add(1))
+}
+
+func (a *App) recordAudit(r *http.Request, principal auth.Principal, action string, resourceType string, resourceID string, outcome string, metadata map[string]string) {
+	if metadata == nil {
+		metadata = make(map[string]string)
+	}
+	if principal.Name == "" {
+		principal.Name = "anonymous"
+	}
+	event := domain.AuditEvent{
+		ID:           a.nextID("aud"),
+		Timestamp:    time.Now().UTC(),
+		Actor:        principal.Name,
+		Roles:        append([]string(nil), principal.Roles...),
+		Action:       action,
+		ResourceType: resourceType,
+		ResourceID:   resourceID,
+		Outcome:      outcome,
+		SourceIP:     sourceIP(r),
+		UserAgent:    r.UserAgent(),
+		Metadata:     metadata,
+	}
+	_ = a.store.AddAudit(event)
 }
 
 func (a *App) exportAlerts(alerts []domain.Alert) {
@@ -429,18 +483,46 @@ func (a *App) withAuth(next http.Handler) http.Handler {
 		}
 		principal, ok := a.auth.Authenticate(r)
 		if !ok {
+			a.recordAudit(r, auth.Principal{Name: "anonymous"}, "auth.authenticate", "http_request", r.URL.Path, "denied", map[string]string{
+				"method": r.Method,
+			})
 			writeError(w, http.StatusUnauthorized, errors.New("missing or invalid API token"))
 			return
 		}
 		required := auth.RequiredRoles(r.Method, r.URL.Path)
 		if !principal.HasAny(required...) {
+			a.recordAudit(r, principal, "auth.authorize", "http_request", r.URL.Path, "denied", map[string]string{
+				"method": r.Method,
+			})
 			writeError(w, http.StatusForbidden, errors.New("insufficient role"))
 			return
 		}
+		r = r.WithContext(context.WithValue(r.Context(), principalContextKey{}, principal))
 		next.ServeHTTP(w, r)
 	})
 }
 
 func isReadOnly(method string) bool {
 	return method == http.MethodGet || method == http.MethodHead || method == http.MethodOptions
+}
+
+type principalContextKey struct{}
+
+func principalFromRequest(r *http.Request) auth.Principal {
+	principal, ok := r.Context().Value(principalContextKey{}).(auth.Principal)
+	if !ok {
+		return auth.Principal{}
+	}
+	return principal
+}
+
+func sourceIP(r *http.Request) string {
+	if forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); forwarded != "" {
+		return strings.TrimSpace(strings.Split(forwarded, ",")[0])
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err == nil {
+		return host
+	}
+	return r.RemoteAddr
 }
