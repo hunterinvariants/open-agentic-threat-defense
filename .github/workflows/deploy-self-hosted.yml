@@ -82,7 +82,16 @@ jobs:
             exit 1
           fi
 
-          if ! curl -fsS "http://127.0.0.1:8080$READY_PATH"; then
+          ready_ok=0
+          for _ in $(seq 1 30); do
+            if curl -fsS "http://127.0.0.1:8080$READY_PATH" >/dev/null; then
+              ready_ok=1
+              break
+            fi
+            sleep 1
+          done
+
+          if [ "$ready_ok" -ne 1 ]; then
             if [ -n "$previous_release" ] && [ -d "$previous_release" ]; then
               sudo ln -sfn "$previous_release" "$current_link"
               sudo systemctl restart "$SERVICE"
