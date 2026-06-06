@@ -12,7 +12,8 @@ func TestLoadConfig(t *testing.T) {
 	body := `{
   "approved_tools": ["asset_inventory", "shell_exec"],
   "approved_egress_hosts": ["example.com"],
-  "correlation_window": "45m"
+  "correlation_window": "45m",
+  "users": [{"name":"alice","token_sha256":"hash","roles":["operator"]}]
 }`
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -31,6 +32,9 @@ func TestLoadConfig(t *testing.T) {
 	}
 	if window != 45*time.Minute {
 		t.Fatalf("unexpected window: %s", window)
+	}
+	if len(loaded.Users) != 1 || loaded.Users[0].Name != "alice" {
+		t.Fatalf("unexpected users: %#v", loaded.Users)
 	}
 }
 

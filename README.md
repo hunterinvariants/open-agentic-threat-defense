@@ -9,15 +9,15 @@ malware behavior, or autonomous propagation. Demo data generates telemetry only.
 
 ## What Exists Now
 
-- Go HTTP service with in-memory storage or optional local JSON snapshot
-  persistence.
+- Go HTTP service with Postgres persistence for production and JSON snapshot
+  fallback for local development.
 - Policy engine for agent-tool abuse, secret exposure, unexpected egress,
   discovery behavior, deception hits, and suspicious model runtime activity.
 - Correlator for multi-signal sequences such as discovery, credential touch,
   agent tool call, and outbound flow.
 - Dry-run response planner for host isolation, egress blocking, tool disabling,
   ticket creation, and secret rotation.
-- Optional token protection for write endpoints.
+- User/token authentication with role-based access control.
 - `oadtdctl replay` for safe JSONL telemetry replay into the ingest API.
 - Browser dashboard with asset risk graph, alerts, events, rules, and response
   actions.
@@ -38,10 +38,16 @@ $env:GOMODCACHE="$PWD\.cache\go-mod"
 go run ./cmd/oadtd --demo
 ```
 
-Run with local persistence and write-token protection:
+Run with Postgres persistence:
 
 ```powershell
-$env:OATD_API_TOKEN="replace-with-a-local-secret"
+$env:OATD_POSTGRES_DSN="postgres://oadtd:oadtd@localhost:5432/oadtd?sslmode=disable"
+go run ./cmd/oadtd --demo --policy configs\example.policy.json
+```
+
+Run with local JSON persistence for development:
+
+```powershell
 go run ./cmd/oadtd --demo --data .cache\oadtd-state.json
 ```
 
@@ -117,16 +123,18 @@ Useful endpoints:
 --addr                 HTTP listen address, default :8080
 --web                  static dashboard directory, default web
 --demo                 load safe demo telemetry at startup
---data                 optional JSON snapshot path for local persistence
+--data                 optional JSON snapshot path for local development persistence
+--postgres-dsn         Postgres DSN for production persistence, defaults to OATD_POSTGRES_DSN
 --policy               optional JSON policy configuration path
---api-token            optional token for POST endpoints, defaults to OATD_API_TOKEN
+--api-token            legacy admin token, defaults to OATD_API_TOKEN
 --alert-webhook-url    optional SIEM/webhook URL for new alerts
 --alert-webhook-token  optional bearer token for alert webhook
 ```
 
-When `--api-token` or `OATD_API_TOKEN` is set, read endpoints remain available
-for the dashboard and health checks, while write endpoints require
-`Authorization: Bearer <token>` or `X-OATD-Token: <token>`.
+When users are configured in the policy file, all API endpoints require
+`Authorization: Bearer <token>` or `X-OATD-Token: <token>` and are checked
+against RBAC roles. `--api-token` remains a legacy admin-token compatibility
+path.
 
 ## Policy Configuration
 
@@ -136,11 +144,33 @@ The policy file is JSON:
 {
   "approved_tools": ["asset_inventory", "ticket_create", "policy_read", "siem_search"],
   "approved_egress_hosts": ["api.openai.com", "github.com", "login.microsoftonline.com"],
-  "correlation_window": "30m"
+  "correlation_window": "30m",
+  "users": [
+    {
+      "name": "admin",
+      "token_sha256": "replace-with-sha256-token-hash",
+      "roles": ["admin"]
+    }
+  ]
 }
 ```
 
-See [configs/example.policy.json](configs/example.policy.json).
+See [configs/example.policy.json](configs/example.policy.json) and
+[configs/example.rbac.policy.json](configs/example.rbac.policy.json).
+
+Create a token hash:
+
+```powershell
+go run ./cmd/oadtdctl token-hash --token "replace-with-secret-token"
+```
+
+Roles:
+
+- `viewer`: read-only API access.
+- `ingestor`: read API access and event/demo ingestion.
+- `analyst`: read API access, ingestion, and response planning.
+- `operator`: analyst permissions plus response approvals.
+- `admin`: all API operations.
 
 ## Telemetry Replay
 

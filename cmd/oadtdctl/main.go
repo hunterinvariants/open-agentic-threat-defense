@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/open-agentic-threat-defense/oadtd/internal/auth"
 	"github.com/open-agentic-threat-defense/oadtd/internal/collectors"
 	"github.com/open-agentic-threat-defense/oadtd/internal/domain"
 	"github.com/open-agentic-threat-defense/oadtd/internal/telemetry"
@@ -34,10 +35,31 @@ func main() {
 		if err := replay(os.Args[2:]); err != nil {
 			log.Fatal(err)
 		}
+	case "token-hash":
+		if err := tokenHash(os.Args[2:]); err != nil {
+			log.Fatal(err)
+		}
 	default:
 		usage()
 		os.Exit(2)
 	}
+}
+
+func tokenHash(args []string) error {
+	fs := flag.NewFlagSet("token-hash", flag.ContinueOnError)
+	token := fs.String("token", "", "token to hash")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	value := *token
+	if value == "" {
+		value = os.Getenv("OATD_TOKEN")
+	}
+	if value == "" {
+		return errors.New("token-hash requires --token or OATD_TOKEN")
+	}
+	fmt.Println(auth.HashToken(value))
+	return nil
 }
 
 func collect(args []string) error {
@@ -198,4 +220,5 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "usage:")
 	fmt.Fprintln(os.Stderr, "  oadtdctl collect --source suricata-eve --file eve.json --output events.jsonl")
 	fmt.Fprintln(os.Stderr, "  oadtdctl replay --file events.jsonl [--url http://localhost:8080] [--token TOKEN]")
+	fmt.Fprintln(os.Stderr, "  oadtdctl token-hash --token TOKEN")
 }

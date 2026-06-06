@@ -14,6 +14,7 @@ func main() {
 	addr := flag.String("addr", ":8080", "HTTP listen address")
 	webDir := flag.String("web", "web", "static dashboard directory")
 	dataPath := flag.String("data", "", "optional JSON snapshot path for local persistence")
+	postgresDSN := flag.String("postgres-dsn", os.Getenv("OATD_POSTGRES_DSN"), "Postgres DSN for production persistence")
 	policyPath := flag.String("policy", "", "optional JSON policy configuration path")
 	apiToken := flag.String("api-token", os.Getenv("OATD_API_TOKEN"), "optional API token for write endpoints")
 	alertWebhookURL := flag.String("alert-webhook-url", os.Getenv("OATD_ALERT_WEBHOOK_URL"), "optional SIEM/webhook URL for new alerts")
@@ -33,7 +34,9 @@ func main() {
 	app, err := server.NewWithOptions(server.Options{
 		WebDir:            *webDir,
 		DataPath:          *dataPath,
+		PostgresDSN:       *postgresDSN,
 		APIToken:          *apiToken,
+		Users:             runtimeConfig.Users,
 		Policy:            runtimeConfig.PolicyConfig(),
 		CorrelationWindow: window,
 		AlertWebhookURL:   *alertWebhookURL,

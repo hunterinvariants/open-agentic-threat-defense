@@ -37,9 +37,9 @@ types.
 ### Store
 
 `internal/store` keeps events, alerts, response actions, and risk ranked assets.
-By default it runs in memory. When `--data` is set, it writes a local JSON
-snapshot and restores state on startup. This keeps the MVP dependency-free while
-leaving room for SQLite or Postgres in the alpha phase.
+For production, `--postgres-dsn` stores data in Postgres tables with JSONB
+payloads and indexed core columns. For local development, `--data` writes a JSON
+snapshot and restores state on startup.
 
 ### Policy Engine
 
@@ -75,11 +75,11 @@ as requiring approval before any future execution backend can act on them.
 `web/` provides an operational dashboard for assets, alerts, events, policies,
 and dry-run response actions.
 
-### Write Authentication
+### Authentication And RBAC
 
-Write endpoints can be protected with `--api-token` or `OATD_API_TOKEN`.
-Read endpoints remain available so the dashboard and health checks can load
-without embedding a token in static assets.
+API access supports user tokens with RBAC roles configured in the policy file.
+Token values are not stored in config; only SHA-256 token hashes are stored.
+The legacy `--api-token` path behaves as an admin token for compatibility.
 
 ### SIEM/Webhook Export
 
@@ -105,7 +105,7 @@ flowchart LR
 ```
 
 The current file-backed snapshot should be treated as local development storage,
-not as a clustered production database.
+not as the production database. Production deployments should use Postgres.
 
 ## Defensive Boundaries
 

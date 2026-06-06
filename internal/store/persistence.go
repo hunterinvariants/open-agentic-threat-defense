@@ -27,6 +27,7 @@ func NewWithPath(path string) (*Store, error) {
 	if path == "" {
 		return s, nil
 	}
+	s.mode = "file"
 
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -57,7 +58,7 @@ func NewWithPath(path string) (*Store, error) {
 }
 
 func (s *Store) persistLocked() error {
-	if s.path == "" {
+	if s.path == "" || s.mode == "postgres" {
 		s.lastErr = ""
 		return nil
 	}
@@ -93,6 +94,27 @@ func (s *Store) persistLocked() error {
 	}
 
 	s.lastErr = ""
+	return nil
+}
+
+func (s *Store) persistEventLocked(event domain.Event) error {
+	if s.db != nil {
+		return s.postgresPersistEventLocked(event)
+	}
+	return nil
+}
+
+func (s *Store) persistAlertsLocked(alerts []domain.Alert) error {
+	if s.db != nil {
+		return s.postgresPersistAlertsLocked(alerts)
+	}
+	return nil
+}
+
+func (s *Store) persistActionsLocked(actions []domain.ResponseAction) error {
+	if s.db != nil {
+		return s.postgresPersistActionsLocked(actions)
+	}
 	return nil
 }
 

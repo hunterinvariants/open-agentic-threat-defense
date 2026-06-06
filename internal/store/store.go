@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"sort"
 	"sync"
 	"time"
@@ -10,6 +11,8 @@ import (
 
 type Store struct {
 	mu           sync.RWMutex
+	db           *sql.DB
+	mode         string
 	events       []domain.Event
 	alerts       []domain.Alert
 	actions      []domain.ResponseAction
@@ -21,6 +24,7 @@ type Store struct {
 
 func New() *Store {
 	return &Store{
+		mode:         "memory",
 		assets:       make(map[string]domain.Asset),
 		fingerprints: make(map[string]struct{}),
 	}
@@ -32,6 +36,10 @@ func (s *Store) AddEvent(event domain.Event) error {
 
 	s.events = append(s.events, event)
 	s.upsertAssetLocked(event)
+	if err := s.persistEventLocked(event); err != nil {
+		s.lastErr = err.Error()
+		return err
+	}
 	return s.persistLocked()
 }
 
@@ -66,6 +74,10 @@ func (s *Store) AddAlerts(alerts []domain.Alert) ([]domain.Alert, error) {
 	if len(added) == 0 {
 		return added, nil
 	}
+	if err := s.persistAlertsLocked(added); err != nil {
+		s.lastErr = err.Error()
+		return nil, err
+	}
 	return added, s.persistLocked()
 }
 
@@ -98,6 +110,10 @@ func (s *Store) AddActions(actions []domain.ResponseAction) error {
 	defer s.mu.Unlock()
 
 	s.actions = append(s.actions, actions...)
+	if err := s.persistActionsLocked(actions); err != nil {
+		s.lastErr = err.Error()
+		return err
+	}
 	return s.persistLocked()
 }
 
@@ -112,6 +128,10 @@ func (s *Store) ApproveAction(id string, approvedBy string, approvedAt time.Time
 		s.actions[i].ApprovalStatus = "approved"
 		s.actions[i].ApprovedBy = approvedBy
 		s.actions[i].ApprovedAt = &approvedAt
+		if err := s.persistActionsLocked([]domain.ResponseAction{s.actions[i]}); err != nil {
+			s.lastErr = err.Error()
+			return domain.ResponseAction{}, true, err
+		}
 		if err := s.persistLocked(); err != nil {
 			return domain.ResponseAction{}, true, err
 		}
@@ -161,6 +181,13 @@ func (s *Store) PersistencePath() string {
 	defer s.mu.RUnlock()
 
 	return s.path
+}
+
+func (s *Store) PersistenceMode() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.mode
 }
 
 func (s *Store) LastPersistenceError() string {

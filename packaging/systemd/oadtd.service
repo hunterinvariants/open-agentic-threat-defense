@@ -8,7 +8,7 @@ Type=simple
 User=oadtd
 Group=oadtd
 WorkingDirectory=/opt/oadtd
-ExecStart=/opt/oadtd/oadtd --addr :8080 --data /var/lib/oadtd/state.json --policy /etc/oadtd/policy.json
+ExecStart=/opt/oadtd/oadtd --addr :8080 --policy /etc/oadtd/policy.json
 EnvironmentFile=-/etc/oadtd/oadtd.env
 Restart=on-failure
 RestartSec=5s
@@ -20,4 +20,3 @@ ReadWritePaths=/var/lib/oadtd
 
 [Install]
 WantedBy=multi-user.target
-

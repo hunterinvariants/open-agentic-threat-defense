@@ -1,0 +1,26 @@
+{
+  "approved_tools": [
+    "asset_inventory",
+    "ticket_create",
+    "policy_read",
+    "siem_search"
+  ],
+  "approved_egress_hosts": [
+    "api.openai.com",
+    "github.com",
+    "login.microsoftonline.com"
+  ],
+  "correlation_window": "30m",
+  "users": [
+    {
+      "name": "admin",
+      "token_sha256": "replace-with-sha256-token-hash",
+      "roles": ["admin"]
+    },
+    {
+      "name": "collector",
+      "token_sha256": "replace-with-sha256-token-hash",
+      "roles": ["ingestor"]
+    }
+  ]
+}

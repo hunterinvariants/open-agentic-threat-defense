@@ -7,8 +7,9 @@
 - Correlation engine.
 - Dry-run response planner.
 - Local dashboard.
-- Optional JSON snapshot persistence.
-- Optional token protection for write endpoints.
+- Postgres persistence for production.
+- Optional JSON snapshot persistence for local development.
+- User-token authentication with RBAC roles.
 - JSON policy configuration for tool, egress, and correlation-window defaults.
 - Safe JSONL telemetry replay client.
 - Collector normalizers for Sysmon JSON, auditd, Zeek conn, and Suricata EVE.
@@ -22,8 +23,8 @@ Status: implemented in this repository.
 
 ## 1-2 Weeks: Alpha
 
-- Durable SQLite or Postgres storage.
-- Authenticated API.
+- Postgres migrations hardening and backup/restore docs.
+- Session-based dashboard login on top of token/RBAC API.
 - Policy reload without restart.
 - Signed tool manifests for AI-agent and MCP surfaces.
 - Long-running collector agents for Sysmon, auditd, Zeek, Suricata, and proxy logs.
@@ -35,7 +36,7 @@ Status: implemented in this repository.
 ## 3-6 Weeks: Beta
 
 - Multi-tenant control plane.
-- RBAC.
+- Organization-level RBAC policies.
 - Policy packs.
 - Deception token registry.
 - Response approvals.

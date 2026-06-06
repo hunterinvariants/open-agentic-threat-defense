@@ -1,7 +1,6 @@
 package server
 
 import (
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/open-agentic-threat-defense/oadtd/internal/auth"
 	"github.com/open-agentic-threat-defense/oadtd/internal/correlator"
 	"github.com/open-agentic-threat-defense/oadtd/internal/domain"
 	"github.com/open-agentic-threat-defense/oadtd/internal/exporter"
@@ -29,7 +29,7 @@ type App struct {
 	correlator *correlator.Correlator
 	responder  *response.Planner
 	webDir     string
-	apiToken   string
+	auth       *auth.Authenticator
 	webhook    exporter.Webhook
 	exportMu   sync.RWMutex
 	exportErr  string
@@ -40,7 +40,9 @@ type App struct {
 type Options struct {
 	WebDir            string
 	DataPath          string
+	PostgresDSN       string
 	APIToken          string
+	Users             []auth.UserConfig
 	Policy            policy.Config
 	CorrelationWindow time.Duration
 	AlertWebhookURL   string
@@ -59,7 +61,13 @@ func NewWithOptions(options Options) (*App, error) {
 	if options.WebDir == "" {
 		options.WebDir = "web"
 	}
-	st, err := store.NewWithPath(options.DataPath)
+	var st *store.Store
+	var err error
+	if options.PostgresDSN != "" {
+		st, err = store.NewWithPostgres(options.PostgresDSN)
+	} else {
+		st, err = store.NewWithPath(options.DataPath)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -72,7 +80,7 @@ func NewWithOptions(options Options) (*App, error) {
 		correlator: correlator.New(options.CorrelationWindow),
 		responder:  response.NewDryRun(),
 		webDir:     options.WebDir,
-		apiToken:   options.APIToken,
+		auth:       auth.New(options.Users, options.APIToken),
 		webhook: exporter.Webhook{
 			URL:   options.AlertWebhookURL,
 			Token: options.AlertWebhookToken,
@@ -110,10 +118,6 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	events, alerts, assets, actions := a.store.Counts()
-	storageMode := "memory"
-	if a.store.PersistencePath() != "" {
-		storageMode = "file"
-	}
 	writeJSON(w, http.StatusOK, domain.Status{
 		Version:          Version,
 		UptimeSeconds:    int64(time.Since(a.startedAt).Seconds()),
@@ -122,7 +126,7 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 		AssetCount:       assets,
 		ActionCount:      actions,
 		StartedAt:        a.startedAt,
-		StorageMode:      storageMode,
+		StorageMode:      a.store.PersistenceMode(),
 		StoragePath:      a.store.PersistencePath(),
 		LastStorageError: a.store.LastPersistenceError(),
 		LastExportError:  a.lastExportError(),
@@ -415,12 +419,22 @@ func withSecurityHeaders(next http.Handler) http.Handler {
 
 func (a *App) withAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if a.apiToken == "" || !strings.HasPrefix(r.URL.Path, "/api/") || isReadOnly(r.Method) {
+		if !strings.HasPrefix(r.URL.Path, "/api/") || a.auth == nil || !a.auth.Enabled() {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if !constantTimeEqual(readToken(r), a.apiToken) {
+		if !a.auth.HasUsers() && isReadOnly(r.Method) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		principal, ok := a.auth.Authenticate(r)
+		if !ok {
 			writeError(w, http.StatusUnauthorized, errors.New("missing or invalid API token"))
+			return
+		}
+		required := auth.RequiredRoles(r.Method, r.URL.Path)
+		if !principal.HasAny(required...) {
+			writeError(w, http.StatusForbidden, errors.New("insufficient role"))
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -429,19 +443,4 @@ func (a *App) withAuth(next http.Handler) http.Handler {
 
 func isReadOnly(method string) bool {
 	return method == http.MethodGet || method == http.MethodHead || method == http.MethodOptions
-}
-
-func readToken(r *http.Request) string {
-	header := r.Header.Get("Authorization")
-	if strings.HasPrefix(strings.ToLower(header), "bearer ") {
-		return strings.TrimSpace(header[len("Bearer "):])
-	}
-	return strings.TrimSpace(r.Header.Get("X-OATD-Token"))
-}
-
-func constantTimeEqual(got string, want string) bool {
-	if got == "" || want == "" {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }
