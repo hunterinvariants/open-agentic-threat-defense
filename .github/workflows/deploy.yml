@@ -1,0 +1,143 @@
+name: deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      host:
+        description: SSH host or IP
+        required: true
+        type: string
+      port:
+        description: SSH port
+        required: false
+        default: "22"
+        type: string
+      user:
+        description: SSH user
+        required: false
+        default: "deploy"
+        type: string
+      target_dir:
+        description: Deployment root directory
+        required: false
+        default: "/opt/oadtd"
+        type: string
+      service:
+        description: systemd service name
+        required: false
+        default: "oadtd"
+        type: string
+      ready_path:
+        description: Local readiness path
+        required: false
+        default: "/readyz"
+        type: string
+      goarch:
+        description: Target GOARCH
+        required: false
+        default: "amd64"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Build Linux binaries
+        shell: bash
+        run: |
+          mkdir -p dist
+          GOOS=linux GOARCH="${{ inputs.goarch }}" go build -o dist/oadtd ./cmd/oadtd
+          GOOS=linux GOARCH="${{ inputs.goarch }}" go build -o dist/oadtdctl ./cmd/oadtdctl
+
+      - name: Start SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.OATD_DEPLOY_SSH_KEY }}
+
+      - name: Trust host key
+        shell: bash
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -p "${{ inputs.port }}" -H "${{ inputs.host }}" >> ~/.ssh/known_hosts
+
+      - name: Prepare remote temp directory
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ inputs.host }}
+          DEPLOY_PORT: ${{ inputs.port }}
+          DEPLOY_USER: ${{ inputs.user }}
+          RELEASE_ID: ${{ github.sha }}
+        run: |
+          ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p /tmp/oadtd-$RELEASE_ID"
+
+      - name: Upload release bundle
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ inputs.host }}
+          DEPLOY_PORT: ${{ inputs.port }}
+          DEPLOY_USER: ${{ inputs.user }}
+          RELEASE_ID: ${{ github.sha }}
+        run: |
+          scp -P "$DEPLOY_PORT" dist/oadtd dist/oadtdctl "$DEPLOY_USER@$DEPLOY_HOST:/tmp/oadtd-$RELEASE_ID/"
+
+      - name: Activate release
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ inputs.host }}
+          DEPLOY_PORT: ${{ inputs.port }}
+          DEPLOY_USER: ${{ inputs.user }}
+          TARGET_DIR: ${{ inputs.target_dir }}
+          SERVICE: ${{ inputs.service }}
+          READY_PATH: ${{ inputs.ready_path }}
+          RELEASE_ID: ${{ github.sha }}
+        run: |
+          ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" "TARGET_DIR='$TARGET_DIR' SERVICE='$SERVICE' READY_PATH='$READY_PATH' RELEASE_ID='$RELEASE_ID' bash -s" <<'EOF'
+          set -euo pipefail
+
+          release_dir="$TARGET_DIR/releases/$RELEASE_ID"
+          current_link="$TARGET_DIR/current"
+          remote_tmp="/tmp/oadtd-$RELEASE_ID"
+          previous_release=""
+
+          if [ -L "$current_link" ] || [ -e "$current_link" ]; then
+            previous_release="$(readlink -f "$current_link" || true)"
+          fi
+
+          sudo install -d -m 0755 "$TARGET_DIR"
+          sudo install -d -m 0755 "$TARGET_DIR/releases"
+          sudo rm -rf "$release_dir"
+          sudo install -d -m 0755 "$release_dir"
+          sudo install -m 0755 "$remote_tmp/oadtd" "$release_dir/oadtd"
+          sudo install -m 0755 "$remote_tmp/oadtdctl" "$release_dir/oadtdctl"
+          sudo rm -rf "$remote_tmp"
+          sudo chown -R root:root "$release_dir"
+
+          sudo ln -sfn "$release_dir" "$current_link"
+          if ! sudo systemctl restart "$SERVICE"; then
+            if [ -n "$previous_release" ] && [ -d "$previous_release" ]; then
+              sudo ln -sfn "$previous_release" "$current_link"
+              sudo systemctl restart "$SERVICE"
+            fi
+            exit 1
+          fi
+
+          if ! curl -fsS "http://127.0.0.1:8080$READY_PATH"; then
+            if [ -n "$previous_release" ] && [ -d "$previous_release" ]; then
+              sudo ln -sfn "$previous_release" "$current_link"
+              sudo systemctl restart "$SERVICE"
+            fi
+            sudo journalctl -u "$SERVICE" -n 100 --no-pager || true
+            exit 1
+          fi
+          EOF

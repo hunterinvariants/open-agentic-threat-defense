@@ -11,12 +11,17 @@ packaging/systemd/oadtd.service
 Suggested layout:
 
 ```text
-/opt/oadtd/oadtd
-/opt/oadtd/oadtdctl
+/opt/oadtd/current/oadtd
+/opt/oadtd/current/oadtdctl
+/opt/oadtd/releases/<sha>/oadtd
+/opt/oadtd/releases/<sha>/oadtdctl
 /etc/oadtd/policy.json
 /etc/oadtd/oadtd.env
 /var/lib/oadtd/state.json
 ```
+
+The service unit points at `/opt/oadtd/current`, so deployments can swap a
+release symlink atomically and restart the service with a rollback available.
 
 For production, set Postgres in `/etc/oadtd/oadtd.env`:
 
@@ -39,9 +44,33 @@ sudo useradd --system --home /var/lib/oadtd --shell /usr/sbin/nologin oadtd
 sudo mkdir -p /opt/oadtd /etc/oadtd /var/lib/oadtd
 sudo chown -R oadtd:oadtd /var/lib/oadtd
 sudo cp packaging/systemd/oadtd.service /etc/systemd/system/oadtd.service
+sudo chown root:oadtd /etc/oadtd/policy.json
+sudo chmod 0640 /etc/oadtd/policy.json
 sudo systemctl daemon-reload
 sudo systemctl enable --now oadtd
 ```
+
+## GitHub Deploy
+
+The repository includes a GitHub Actions deployment workflow for reachable
+Ubuntu hosts. It expects a release layout like this:
+
+```text
+/opt/oadtd/releases/<sha>/oadtd
+/opt/oadtd/releases/<sha>/oadtdctl
+/opt/oadtd/current -> /opt/oadtd/releases/<sha>
+```
+
+The workflow needs SSH credentials and host details through repository or
+environment secrets:
+
+- `OATD_DEPLOY_HOST`
+- `OATD_DEPLOY_PORT`
+- `OATD_DEPLOY_USER`
+- `OATD_DEPLOY_SSH_KEY`
+
+The target user must be able to restart `oadtd` through `sudo` without an
+interactive password prompt.
 
 ## Windows Service
 
