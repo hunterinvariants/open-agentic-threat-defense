@@ -25,10 +25,13 @@ malware behavior, or autonomous propagation. Demo data generates telemetry only.
   planning, and response approvals.
 - `oadtdctl replay` for safe JSONL telemetry replay into the ingest API.
 - `oadtdctl agent` for long-running tail-based collection from supported
-  defensive telemetry sources.
+  defensive telemetry sources, including native Windows Event Log and Linux
+  journald modes.
 - Browser dashboard with asset risk graph, alerts, events, rules, and response
   actions, plus session-based dashboard login.
 - Alert webhook export for SIEM-style integrations.
+- GitHub issue creation for incident tickets and GitHub workflow dispatch for
+  approval-gated response execution.
 - systemd and Windows service starter packaging.
 - AGPLv3-or-later community license, commercial dual-license path, and CLA from
   day 1.
@@ -85,9 +88,11 @@ GitHub CI runs the same test suite with a real Postgres service and builds
 Linux/Windows binaries for `amd64` and `arm64`.
 
 GitHub security automation includes CodeQL analysis and Dependabot updates for
-Go modules and GitHub Actions.
+Go modules and GitHub Actions, plus dependency-review checks on pull requests.
 
-Tagged releases publish platform binaries and a `SHA256SUMS` manifest.
+Tagged releases publish platform binaries, an SPDX SBOM, and a `SHA256SUMS`
+manifest. If signing secrets are configured, the checksum manifest is signed as
+well.
 
 Postgres operators can create and restore portable JSON backups with
 `oadtdctl backup` and `oadtdctl restore`.
@@ -173,6 +178,12 @@ Useful endpoints:
 --ticket-webhook-token optional bearer token for ticket webhook
 --response-webhook-url optional webhook URL for approved response actions
 --response-webhook-token optional bearer token for response webhook
+--github-api-base      optional GitHub API base URL
+--github-owner         GitHub owner for issue and workflow integrations
+--github-repo          GitHub repository for issue and workflow integrations
+--github-token         GitHub token for issue and workflow integrations
+--github-workflow-file GitHub workflow file for approved response actions
+--github-workflow-ref  GitHub ref for workflow dispatch
 ```
 
 When users are configured in the policy file, all API endpoints require
@@ -257,6 +268,13 @@ the ingest API:
 
 ```powershell
 go run ./cmd/oadtdctl agent --source sysmon-json --file sysmon.jsonl --url http://localhost:8080 --state-file .cache\agent-state.json
+```
+
+Native collector modes:
+
+```powershell
+go run ./cmd/oadtdctl agent --source windows-eventlog --log-name Microsoft-Windows-Sysmon/Operational --url http://localhost:8080
+go run ./cmd/oadtdctl agent --source journald --journal-unit ssh.service --url http://localhost:8080
 ```
 
 Operations notes are in [docs/operations.md](docs/operations.md).

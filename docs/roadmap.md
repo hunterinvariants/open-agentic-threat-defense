@@ -16,11 +16,14 @@
 - Long-running collector agents for Sysmon, auditd, Zeek, and Suricata.
 - Alert webhook export.
 - Response approval state for planned actions and webhook-based execution export.
+- GitHub issue creation for incident tickets and GitHub workflow dispatch for
+  approved runbooks.
 - Audit logging for authentication, RBAC, ingestion, planning, and approval
   events.
 - Docker Compose Postgres service plus optional Postgres integration test.
 - Versioned Postgres schema migrations.
-- CodeQL and Dependabot GitHub automation.
+- CodeQL, Dependabot, dependency review, and release SBOM/checksum/signing
+  GitHub automation.
 - systemd and Windows service starter packaging.
 - AGPLv3-or-later plus commercial dual-license path.
 - CLA requirement from day 1.
@@ -36,6 +39,7 @@ Status: implemented in this repository.
 - JSONL replay batching, backoff, and structured import reports.
 - Export to SIEM via webhook or JSONL.
 - Basic installer and service wrapper.
+- Native collector agents for Windows Event Log and Linux journald.
 - CLA automation for pull requests.
 
 ## 3-6 Weeks: Beta

@@ -240,13 +240,15 @@ func restore(args []string) error {
 
 func agentCommand(args []string) error {
 	fs := flag.NewFlagSet("agent", flag.ContinueOnError)
-	source := fs.String("source", "", "collector source: "+strings.Join(collectors.Sources(), ", "))
+	source := fs.String("source", "", "collector source: "+strings.Join(agentSources(), ", "))
 	filePath := fs.String("file", "", "path to the source log file")
 	baseURL := fs.String("url", "http://localhost:8080", "OATD base URL")
 	token := fs.String("token", os.Getenv("OATD_API_TOKEN"), "optional API token")
 	batchSize := fs.Int("batch-size", 100, "events per request")
 	pollInterval := fs.Duration("poll-interval", 5*time.Second, "poll interval for tailing")
 	statePath := fs.String("state-file", "", "optional state file for offsets")
+	nativeLogName := fs.String("log-name", "Microsoft-Windows-Sysmon/Operational", "Windows event log name for native collection")
+	nativeJournalUnit := fs.String("journal-unit", "", "optional systemd unit filter for native journald collection")
 	once := fs.Bool("once", false, "process available content once and exit")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -254,19 +256,21 @@ func agentCommand(args []string) error {
 	if *source == "" {
 		return errors.New("agent requires --source")
 	}
-	if *filePath == "" {
+	if !isNativeAgentSource(*source) && *filePath == "" {
 		return errors.New("agent requires --file")
 	}
 	ctx := context.Background()
 	if err := agent.Run(ctx, agent.Config{
-		Source:       *source,
-		Path:         *filePath,
-		BaseURL:      *baseURL,
-		Token:        *token,
-		BatchSize:    *batchSize,
-		PollInterval: *pollInterval,
-		StatePath:    *statePath,
-		Once:         *once,
+		Source:            *source,
+		Path:              *filePath,
+		BaseURL:           *baseURL,
+		Token:             *token,
+		BatchSize:         *batchSize,
+		PollInterval:      *pollInterval,
+		StatePath:         *statePath,
+		Once:              *once,
+		NativeLogName:     *nativeLogName,
+		NativeJournalUnit: *nativeJournalUnit,
 	}); err != nil {
 		return err
 	}
@@ -346,5 +350,20 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  oadtdctl backup --postgres-dsn DSN --output backup.json")
 	fmt.Fprintln(os.Stderr, "  oadtdctl restore --postgres-dsn DSN --input backup.json")
 	fmt.Fprintln(os.Stderr, "  oadtdctl agent --source sysmon-json --file sysmon.jsonl [--url http://localhost:8080]")
+	fmt.Fprintln(os.Stderr, "  oadtdctl agent --source windows-eventlog [--log-name Microsoft-Windows-Sysmon/Operational]")
+	fmt.Fprintln(os.Stderr, "  oadtdctl agent --source journald [--journal-unit ssh.service]")
 	fmt.Fprintln(os.Stderr, "  oadtdctl token-hash --token TOKEN")
+}
+
+func isNativeAgentSource(source string) bool {
+	switch source {
+	case "windows-eventlog", "journald":
+		return true
+	default:
+		return false
+	}
+}
+
+func agentSources() []string {
+	return append(collectors.Sources(), "windows-eventlog", "journald")
 }

@@ -23,6 +23,12 @@ func main() {
 	ticketWebhookToken := flag.String("ticket-webhook-token", os.Getenv("OATD_TICKET_WEBHOOK_TOKEN"), "optional bearer token for ticket webhook")
 	responseWebhookURL := flag.String("response-webhook-url", os.Getenv("OATD_RESPONSE_WEBHOOK_URL"), "optional webhook URL for approved response actions")
 	responseWebhookToken := flag.String("response-webhook-token", os.Getenv("OATD_RESPONSE_WEBHOOK_TOKEN"), "optional bearer token for response webhook")
+	githubAPIBaseURL := flag.String("github-api-base", os.Getenv("OATD_GITHUB_API_BASE"), "optional GitHub API base URL")
+	githubOwner := flag.String("github-owner", os.Getenv("OATD_GITHUB_OWNER"), "GitHub owner for issue and workflow integrations")
+	githubRepo := flag.String("github-repo", os.Getenv("OATD_GITHUB_REPO"), "GitHub repository for issue and workflow integrations")
+	githubToken := flag.String("github-token", os.Getenv("OATD_GITHUB_TOKEN"), "GitHub token for issue and workflow integrations")
+	githubWorkflowFile := flag.String("github-workflow-file", os.Getenv("OATD_GITHUB_WORKFLOW_FILE"), "GitHub workflow file for approved response actions")
+	githubWorkflowRef := flag.String("github-workflow-ref", os.Getenv("OATD_GITHUB_WORKFLOW_REF"), "GitHub ref for workflow dispatch")
 	withDemo := flag.Bool("demo", false, "load safe demo telemetry at startup")
 	flag.Parse()
 
@@ -49,6 +55,12 @@ func main() {
 		TicketWebhookToken:   *ticketWebhookToken,
 		ResponseWebhookURL:   *responseWebhookURL,
 		ResponseWebhookToken: *responseWebhookToken,
+		GitHubAPIBaseURL:     *githubAPIBaseURL,
+		GitHubOwner:          *githubOwner,
+		GitHubRepo:           *githubRepo,
+		GitHubToken:          *githubToken,
+		GitHubWorkflowFile:   *githubWorkflowFile,
+		GitHubWorkflowRef:    *githubWorkflowRef,
 	})
 	if err != nil {
 		log.Fatal(err)

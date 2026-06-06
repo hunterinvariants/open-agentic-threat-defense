@@ -35,6 +35,7 @@ type App struct {
 	webhook         exporter.Webhook
 	ticketWebhook   exporter.Webhook
 	responseWebhook exporter.Webhook
+	github          exporter.GitHub
 	exportMu        sync.RWMutex
 	exportErr       string
 	startedAt       time.Time
@@ -55,6 +56,12 @@ type Options struct {
 	TicketWebhookToken   string
 	ResponseWebhookURL   string
 	ResponseWebhookToken string
+	GitHubAPIBaseURL     string
+	GitHubOwner          string
+	GitHubRepo           string
+	GitHubToken          string
+	GitHubWorkflowFile   string
+	GitHubWorkflowRef    string
 }
 
 func New(webDir string) *App {
@@ -100,6 +107,14 @@ func NewWithOptions(options Options) (*App, error) {
 		responseWebhook: exporter.Webhook{
 			URL:   options.ResponseWebhookURL,
 			Token: options.ResponseWebhookToken,
+		},
+		github: exporter.GitHub{
+			BaseURL:      options.GitHubAPIBaseURL,
+			Owner:        options.GitHubOwner,
+			Repo:         options.GitHubRepo,
+			Token:        options.GitHubToken,
+			WorkflowFile: options.GitHubWorkflowFile,
+			WorkflowRef:  options.GitHubWorkflowRef,
 		},
 		startedAt: time.Now().UTC(),
 	}, nil
@@ -470,7 +485,21 @@ func (a *App) handleDemo(w http.ResponseWriter, r *http.Request) {
 func (a *App) executeTicketAction(r *http.Request, principal auth.Principal, action domain.ResponseAction) (domain.ResponseAction, error) {
 	status := "not_configured"
 	executionError := ""
-	if a.ticketWebhook.URL != "" {
+	if a.github.Enabled() {
+		if err := a.github.CreateIssue(action); err != nil {
+			status = "failed"
+			executionError = err.Error()
+			a.recordAudit(r, principal, "responses.execute", "response_action", action.ID, "failed", map[string]string{
+				"error":     err.Error(),
+				"connector": "github_issue",
+			})
+		} else {
+			status = "sent"
+			a.recordAudit(r, principal, "responses.execute", "response_action", action.ID, "accepted", map[string]string{
+				"connector": "github_issue",
+			})
+		}
+	} else if a.ticketWebhook.URL != "" {
 		if err := a.ticketWebhook.ExportIncidentTicket(action); err != nil {
 			status = "failed"
 			executionError = err.Error()
@@ -502,7 +531,21 @@ func (a *App) executeTicketAction(r *http.Request, principal auth.Principal, act
 func (a *App) executeResponseAction(r *http.Request, principal auth.Principal, action domain.ResponseAction) (domain.ResponseAction, error) {
 	status := "not_configured"
 	executionError := ""
-	if a.responseWebhook.URL != "" {
+	if a.github.Enabled() && a.github.WorkflowFile != "" {
+		if err := a.github.DispatchWorkflow(action); err != nil {
+			status = "failed"
+			executionError = err.Error()
+			a.recordAudit(r, principal, "responses.execute", "response_action", action.ID, "failed", map[string]string{
+				"error":     err.Error(),
+				"connector": "github_workflow",
+			})
+		} else {
+			status = "sent"
+			a.recordAudit(r, principal, "responses.execute", "response_action", action.ID, "accepted", map[string]string{
+				"connector": "github_workflow",
+			})
+		}
+	} else if a.responseWebhook.URL != "" {
 		if err := a.responseWebhook.ExportResponseAction(action); err != nil {
 			status = "failed"
 			executionError = err.Error()

@@ -402,6 +402,85 @@ func TestResponsePlanningExportsIncidentTicket(t *testing.T) {
 	}
 }
 
+func TestGitHubResponseConnectors(t *testing.T) {
+	var issuePath string
+	var dispatchPath string
+	issueSeen := false
+	dispatchSeen := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/issues"):
+			issueSeen = true
+			issuePath = r.URL.Path
+			w.WriteHeader(http.StatusCreated)
+		case strings.HasSuffix(r.URL.Path, "/dispatches"):
+			dispatchSeen = true
+			dispatchPath = r.URL.Path
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	app, err := NewWithOptions(Options{
+		GitHubAPIBaseURL:   server.URL,
+		GitHubOwner:        "owner",
+		GitHubRepo:         "repo",
+		GitHubToken:        "token",
+		GitHubWorkflowFile: "runbook.yml",
+		GitHubWorkflowRef:  "main",
+	})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+	if _, err := app.LoadDemo(); err != nil {
+		t.Fatalf("load demo: %v", err)
+	}
+	alerts := app.store.ListAlerts()
+	if len(alerts) == 0 {
+		t.Fatal("expected demo alerts")
+	}
+
+	planReq := httptest.NewRequest(http.MethodPost, "/api/responses", strings.NewReader(`{"alert_id":"`+alerts[0].ID+`"}`))
+	planRec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(planRec, planReq)
+	if planRec.Code != http.StatusAccepted {
+		t.Fatalf("expected plan 202, got %d: %s", planRec.Code, planRec.Body.String())
+	}
+
+	actions := app.store.ListActions()
+	var ticketActionID string
+	var approvalActionID string
+	for _, action := range actions {
+		switch action.Type {
+		case "create_incident_ticket":
+			ticketActionID = action.ID
+		case "isolate_host":
+			approvalActionID = action.ID
+		}
+	}
+	if ticketActionID == "" || approvalActionID == "" {
+		t.Fatalf("expected ticket and approval actions, got %#v", actions)
+	}
+
+	approveReq := httptest.NewRequest(http.MethodPost, "/api/responses/approve", strings.NewReader(`{"action_id":"`+approvalActionID+`","approved_by":"alice"}`))
+	approveRec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(approveRec, approveReq)
+	if approveRec.Code != http.StatusAccepted {
+		t.Fatalf("expected approve 202, got %d: %s", approveRec.Code, approveRec.Body.String())
+	}
+	if !issueSeen || !dispatchSeen {
+		t.Fatalf("expected github issue and dispatch calls, issue=%v dispatch=%v", issueSeen, dispatchSeen)
+	}
+	if issuePath != "/repos/owner/repo/issues" {
+		t.Fatalf("unexpected issue path: %s", issuePath)
+	}
+	if dispatchPath != "/repos/owner/repo/actions/workflows/runbook.yml/dispatches" {
+		t.Fatalf("unexpected dispatch path: %s", dispatchPath)
+	}
+}
+
 func TestAlertWebhookExportsNewAlerts(t *testing.T) {
 	exported := 0
 	webhook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

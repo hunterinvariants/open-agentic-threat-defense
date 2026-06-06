@@ -35,6 +35,9 @@ persists its offset state, normalizes newly appended content, and posts event
 batches to the ingest API. It is intended for lab and lightweight deployment
 scenarios where a direct file tail is enough.
 
+Native modes for Windows Event Log and Linux journald are supported for direct
+platform collection without relying on a log file tail.
+
 ### Domain Model
 
 `internal/domain` defines the shared event, alert, asset, rule, response, and
@@ -84,6 +87,10 @@ execution gate outside the core service.
 Planned incident-ticket actions are exported immediately to a separate ticket
 connector so operators get a traceable incident record even when a containment
 step still needs approval.
+
+For concrete target systems, GitHub issue creation can stand in for incident
+tracking, and GitHub Actions workflow dispatch can act as the approval-gated
+runbook executor.
 
 ### Dashboard
 

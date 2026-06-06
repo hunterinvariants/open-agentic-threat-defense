@@ -42,11 +42,27 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          output-file: dist/SBOM.spdx.json
+          format: spdx-json
       - name: Generate checksums
         shell: bash
         run: |
           cd dist
           find . -maxdepth 1 -type f \( -name 'oadtd-*' -o -name 'oadtdctl-*' \) -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+      - name: Sign checksum manifest
+        if: ${{ secrets.COSIGN_PRIVATE_KEY != '' }}
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        shell: bash
+        run: |
+          cosign sign-blob --yes --key env://COSIGN_PRIVATE_KEY --output-signature dist/SHA256SUMS.sig dist/SHA256SUMS
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*

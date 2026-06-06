@@ -87,6 +87,20 @@ go run ./cmd/oadtd --demo
 
 The payload type is `oadtd.response_action`.
 
+GitHub can be used as a concrete execution target for incidents and approved
+runbooks:
+
+```powershell
+$env:OATD_GITHUB_OWNER="hunterinvariants"
+$env:OATD_GITHUB_REPO="open-agentic-threat-defense"
+$env:OATD_GITHUB_TOKEN="replace-with-token"
+$env:OATD_GITHUB_WORKFLOW_FILE="runbook.yml"
+go run ./cmd/oadtd --demo
+```
+
+Incident plans create GitHub issues. Approved response actions dispatch the
+configured workflow file.
+
 ## Storage
 
 Production durable storage is Postgres via `--postgres-dsn` or
@@ -135,6 +149,13 @@ go run ./cmd/oadtdctl agent --source sysmon-json --file sysmon.jsonl --url http:
 
 Use `--once` for a single pass over the current file contents, or omit it to
 keep polling for appended telemetry.
+
+Native source modes are also available:
+
+```powershell
+go run ./cmd/oadtdctl agent --source windows-eventlog --log-name Microsoft-Windows-Sysmon/Operational --url http://localhost:8080
+go run ./cmd/oadtdctl agent --source journald --journal-unit ssh.service --url http://localhost:8080
+```
 
 ## Audit Log
 
