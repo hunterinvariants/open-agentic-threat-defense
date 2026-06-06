@@ -72,6 +72,10 @@ environment secrets:
 The target user must be able to restart `oadtd` through `sudo` without an
 interactive password prompt.
 
+The actual release swap logic lives in `scripts/deploy-release.sh`. It prints
+step groups, service status, and the last journal lines if a step fails, so the
+GitHub Actions log shows the real failure point instead of only `exit 1`.
+
 ## GitHub Self-hosted Runner
 
 For a local Ubuntu VM staging environment, the repository includes a

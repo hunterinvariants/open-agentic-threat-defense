@@ -54,48 +54,10 @@ jobs:
           SERVICE: ${{ inputs.service }}
           READY_PATH: ${{ inputs.ready_path }}
         run: |
-          set -euo pipefail
-
-          target_dir="/opt/oadtd"
-          release_dir="$target_dir/releases/$RELEASE_ID"
-          current_link="$target_dir/current"
-          previous_release=""
-
-          if [ -L "$current_link" ] || [ -e "$current_link" ]; then
-            previous_release="$(readlink -f "$current_link" || true)"
-          fi
-
-          sudo install -d -m 0755 "$target_dir"
-          sudo install -d -m 0755 "$target_dir/releases"
-          sudo rm -rf "$release_dir"
-          sudo install -d -m 0755 "$release_dir"
-          sudo install -m 0755 dist/oadtd "$release_dir/oadtd"
-          sudo install -m 0755 dist/oadtdctl "$release_dir/oadtdctl"
-          sudo chown -R root:root "$release_dir"
-          sudo ln -sfn "$release_dir" "$current_link"
-
-          if ! sudo systemctl restart "$SERVICE"; then
-            if [ -n "$previous_release" ] && [ -d "$previous_release" ]; then
-              sudo ln -sfn "$previous_release" "$current_link"
-              sudo systemctl restart "$SERVICE"
-            fi
-            exit 1
-          fi
-
-          ready_ok=0
-          for _ in $(seq 1 30); do
-            if curl -fsS "http://127.0.0.1:8080$READY_PATH" >/dev/null; then
-              ready_ok=1
-              break
-            fi
-            sleep 1
-          done
-
-          if [ "$ready_ok" -ne 1 ]; then
-            if [ -n "$previous_release" ] && [ -d "$previous_release" ]; then
-              sudo ln -sfn "$previous_release" "$current_link"
-              sudo systemctl restart "$SERVICE"
-            fi
-            sudo journalctl -u "$SERVICE" -n 100 --no-pager || true
-            exit 1
-          fi
+          sudo env \
+            DEPLOY_SOURCE_DIR="$GITHUB_WORKSPACE/dist" \
+            DEPLOY_TARGET_DIR="/opt/oadtd" \
+            DEPLOY_SERVICE="$SERVICE" \
+            DEPLOY_READY_PATH="$READY_PATH" \
+            DEPLOY_RELEASE_ID="$RELEASE_ID" \
+            bash scripts/deploy-release.sh
