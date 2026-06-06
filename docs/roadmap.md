@@ -18,6 +18,8 @@
 - Audit logging for authentication, RBAC, ingestion, planning, and approval
   events.
 - Docker Compose Postgres service plus optional Postgres integration test.
+- Versioned Postgres schema migrations.
+- CodeQL and Dependabot GitHub automation.
 - systemd and Windows service starter packaging.
 - AGPLv3-or-later plus commercial dual-license path.
 - CLA requirement from day 1.
@@ -26,7 +28,7 @@ Status: implemented in this repository.
 
 ## 1-2 Weeks: Alpha
 
-- Postgres migration versioning and backup/restore docs.
+- Postgres backup/restore docs.
 - Session-based dashboard login on top of token/RBAC API.
 - Policy reload without restart.
 - Signed tool manifests for AI-agent and MCP surfaces.

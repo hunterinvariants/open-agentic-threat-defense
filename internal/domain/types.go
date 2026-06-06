@@ -137,6 +137,7 @@ type Status struct {
 	StartedAt        time.Time `json:"started_at"`
 	StorageMode      string    `json:"storage_mode"`
 	StoragePath      string    `json:"storage_path,omitempty"`
+	SchemaVersion    int       `json:"schema_version,omitempty"`
 	LastStorageError string    `json:"last_storage_error,omitempty"`
 	LastExportError  string    `json:"last_export_error,omitempty"`
 }

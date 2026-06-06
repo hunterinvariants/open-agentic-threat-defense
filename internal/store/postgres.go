@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -51,7 +52,101 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) postgresMigrate(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, `
+	if _, err := s.db.ExecContext(ctx, `SELECT pg_advisory_lock(72743001)`); err != nil {
+		return err
+	}
+	defer s.db.ExecContext(context.Background(), `SELECT pg_advisory_unlock(72743001)`)
+
+	if _, err := s.db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS oatd_schema_migrations (
+  version INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);`); err != nil {
+		return err
+	}
+
+	applied, err := s.postgresAppliedMigrations(ctx)
+	if err != nil {
+		return err
+	}
+	for _, migration := range postgresMigrations {
+		if applied[migration.Version] {
+			continue
+		}
+		if err := s.applyPostgresMigration(ctx, migration); err != nil {
+			return err
+		}
+		applied[migration.Version] = true
+	}
+
+	version, err := s.postgresCurrentSchemaVersion(ctx)
+	if err != nil {
+		return err
+	}
+	s.schemaVersion = version
+	return nil
+}
+
+func (s *Store) postgresAppliedMigrations(ctx context.Context) (map[int]bool, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT version FROM oatd_schema_migrations`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	applied := map[int]bool{}
+	for rows.Next() {
+		var version int
+		if err := rows.Scan(&version); err != nil {
+			return nil, err
+		}
+		applied[version] = true
+	}
+	return applied, rows.Err()
+}
+
+func (s *Store) applyPostgresMigration(ctx context.Context, migration postgresMigration) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, migration.SQL); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("apply postgres migration %d %s: %w", migration.Version, migration.Name, err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO oatd_schema_migrations (version, name)
+VALUES ($1, $2)
+ON CONFLICT (version) DO NOTHING`, migration.Version, migration.Name); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) postgresCurrentSchemaVersion(ctx context.Context) (int, error) {
+	var version sql.NullInt64
+	if err := s.db.QueryRowContext(ctx, `SELECT max(version) FROM oatd_schema_migrations`).Scan(&version); err != nil {
+		return 0, err
+	}
+	if !version.Valid {
+		return 0, nil
+	}
+	return int(version.Int64), nil
+}
+
+type postgresMigration struct {
+	Version int
+	Name    string
+	SQL     string
+}
+
+var postgresMigrations = []postgresMigration{
+	{
+		Version: 1,
+		Name:    "initial_schema",
+		SQL: `
 CREATE TABLE IF NOT EXISTS oatd_events (
   id TEXT PRIMARY KEY,
   occurred_at TIMESTAMPTZ,
@@ -104,8 +199,8 @@ CREATE TABLE IF NOT EXISTS oatd_audit_events (
 );
 CREATE INDEX IF NOT EXISTS idx_oatd_audit_events_occurred_at ON oatd_audit_events (occurred_at DESC);
 CREATE INDEX IF NOT EXISTS idx_oatd_audit_events_actor ON oatd_audit_events (actor);
-CREATE INDEX IF NOT EXISTS idx_oatd_audit_events_action ON oatd_audit_events (action);`)
-	return err
+CREATE INDEX IF NOT EXISTS idx_oatd_audit_events_action ON oatd_audit_events (action);`,
+	},
 }
 
 func (s *Store) postgresLoad(ctx context.Context) error {

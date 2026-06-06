@@ -81,6 +81,9 @@ go test ./...
 GitHub CI runs the same test suite with a real Postgres service and builds
 Linux/Windows binaries for `amd64` and `arm64`.
 
+GitHub security automation includes CodeQL analysis and Dependabot updates for
+Go modules and GitHub Actions.
+
 Run the optional Postgres integration test:
 
 ```powershell

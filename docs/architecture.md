@@ -38,8 +38,9 @@ audit event types.
 
 `internal/store` keeps events, alerts, response actions, audit events, and risk
 ranked assets. For production, `--postgres-dsn` stores data in Postgres tables
-with JSONB payloads and indexed core columns. For local development, `--data`
-writes a JSON snapshot and restores state on startup.
+with JSONB payloads and indexed core columns. Schema changes are applied through
+versioned migrations recorded in `oatd_schema_migrations`. For local
+development, `--data` writes a JSON snapshot and restores state on startup.
 
 ### Policy Engine
 

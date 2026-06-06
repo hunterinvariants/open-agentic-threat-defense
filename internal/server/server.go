@@ -132,6 +132,7 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 		StartedAt:        a.startedAt,
 		StorageMode:      a.store.PersistenceMode(),
 		StoragePath:      a.store.PersistencePath(),
+		SchemaVersion:    a.store.SchemaVersion(),
 		LastStorageError: a.store.LastPersistenceError(),
 		LastExportError:  a.lastExportError(),
 	})

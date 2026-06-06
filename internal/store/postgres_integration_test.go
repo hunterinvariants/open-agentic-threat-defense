@@ -27,6 +27,9 @@ func TestPostgresPersistenceIntegration(t *testing.T) {
 		t.Fatalf("new postgres store: %v", err)
 	}
 	defer cleanupPostgresIntegrationRows(t, s, eventID, alertID, actionID, auditID, assetID)
+	if s.SchemaVersion() < 1 {
+		t.Fatalf("expected postgres schema version, got %d", s.SchemaVersion())
+	}
 
 	event := domain.Event{
 		ID:        eventID,
@@ -89,6 +92,9 @@ func TestPostgresPersistenceIntegration(t *testing.T) {
 		t.Fatalf("reload postgres store: %v", err)
 	}
 	defer loaded.Close()
+	if loaded.SchemaVersion() != s.SchemaVersion() {
+		t.Fatalf("unexpected reloaded schema version: got %d want %d", loaded.SchemaVersion(), s.SchemaVersion())
+	}
 
 	if !hasEvent(loaded.ListEvents(), eventID) {
 		t.Fatalf("expected reloaded event %s", eventID)

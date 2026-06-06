@@ -70,10 +70,13 @@ The payload type is `oadtd.alerts`.
 ## Storage
 
 Production durable storage is Postgres via `--postgres-dsn` or
-`OATD_POSTGRES_DSN`. OATD creates the required tables automatically.
+`OATD_POSTGRES_DSN`. OATD creates and upgrades the required tables through
+versioned migrations tracked in `oatd_schema_migrations`.
 
 The local JSON snapshot configured with `--data` remains useful for development
 and quick labs, but it is not the production storage path.
+
+`GET /api/status` exposes the active `schema_version` when Postgres is enabled.
 
 The optional Postgres integration test is disabled by default and runs only when
 `OATD_TEST_POSTGRES_DSN` is set:

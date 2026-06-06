@@ -10,17 +10,18 @@ import (
 )
 
 type Store struct {
-	mu           sync.RWMutex
-	db           *sql.DB
-	mode         string
-	events       []domain.Event
-	alerts       []domain.Alert
-	actions      []domain.ResponseAction
-	audits       []domain.AuditEvent
-	assets       map[string]domain.Asset
-	fingerprints map[string]struct{}
-	path         string
-	lastErr      string
+	mu            sync.RWMutex
+	db            *sql.DB
+	mode          string
+	events        []domain.Event
+	alerts        []domain.Alert
+	actions       []domain.ResponseAction
+	audits        []domain.AuditEvent
+	assets        map[string]domain.Asset
+	fingerprints  map[string]struct{}
+	path          string
+	lastErr       string
+	schemaVersion int
 }
 
 func New() *Store {
@@ -220,6 +221,13 @@ func (s *Store) LastPersistenceError() string {
 	defer s.mu.RUnlock()
 
 	return s.lastErr
+}
+
+func (s *Store) SchemaVersion() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.schemaVersion
 }
 
 func (s *Store) upsertAssetLocked(event domain.Event) {
