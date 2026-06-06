@@ -1,0 +1,23 @@
+[Unit]
+Description=Open Agentic Threat Defense
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=oadtd
+Group=oadtd
+WorkingDirectory=/opt/oadtd
+ExecStart=/opt/oadtd/oadtd --addr :8080 --data /var/lib/oadtd/state.json --policy /etc/oadtd/policy.json
+EnvironmentFile=-/etc/oadtd/oadtd.env
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/var/lib/oadtd
+
+[Install]
+WantedBy=multi-user.target
+

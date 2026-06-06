@@ -162,10 +162,11 @@ function renderActions(actions) {
     node.innerHTML = `
       <div class="item-top">
         <div class="item-title">${escapeHtml(action.type)}</div>
-        <span class="chip">${escapeHtml(action.mode)}</span>
+        <span class="chip">${escapeHtml(action.approval_status || action.mode)}</span>
       </div>
       <div class="item-meta">${escapeHtml(action.asset_id || "unknown asset")} · ${escapeHtml(action.target || "-")}</div>
       <p class="item-body">${escapeHtml(action.reason || "")}</p>
+      ${action.approval_status === "required" ? `<div class="item-top action-row"><span class="item-meta">approval required</span><button class="small" data-approve="${escapeHtml(action.id)}">Approve</button></div>` : ""}
     `;
     els.actionsList.append(node);
   });
@@ -286,6 +287,21 @@ els.alertsList.addEventListener("click", async (event) => {
     await api("/api/responses", {
       method: "POST",
       body: JSON.stringify({ alert_id: button.dataset.respond })
+    });
+    await refresh();
+  } finally {
+    button.disabled = false;
+  }
+});
+
+els.actionsList.addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-approve]");
+  if (!button) return;
+  button.disabled = true;
+  try {
+    await api("/api/responses/approve", {
+      method: "POST",
+      body: JSON.stringify({ action_id: button.dataset.approve, approved_by: "dashboard" })
     });
     await refresh();
   } finally {

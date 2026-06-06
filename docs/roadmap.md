@@ -11,6 +11,10 @@
 - Optional token protection for write endpoints.
 - JSON policy configuration for tool, egress, and correlation-window defaults.
 - Safe JSONL telemetry replay client.
+- Collector normalizers for Sysmon JSON, auditd, Zeek conn, and Suricata EVE.
+- Alert webhook export.
+- Response approval state for planned actions.
+- systemd and Windows service starter packaging.
 - AGPLv3-or-later plus commercial dual-license path.
 - CLA requirement from day 1.
 
@@ -22,7 +26,7 @@ Status: implemented in this repository.
 - Authenticated API.
 - Policy reload without restart.
 - Signed tool manifests for AI-agent and MCP surfaces.
-- Collector adapters for Sysmon, auditd, Zeek, Suricata, and proxy logs.
+- Long-running collector agents for Sysmon, auditd, Zeek, Suricata, and proxy logs.
 - JSONL replay batching, backoff, and structured import reports.
 - Export to SIEM via webhook or JSONL.
 - Basic installer and service wrapper.

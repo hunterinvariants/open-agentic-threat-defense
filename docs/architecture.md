@@ -25,6 +25,10 @@ static dashboard.
 This gives teams a safe way to replay logs and simulation traces without adding
 offensive behavior.
 
+The `collect` command normalizes supported defensive telemetry sources into
+OATD JSONL. Current sources are Sysmon JSON, auditd text, Zeek conn logs, and
+Suricata EVE JSON.
+
 ### Domain Model
 
 `internal/domain` defines the shared event, alert, asset, rule, and response
@@ -63,6 +67,9 @@ appear on the same asset. The window is configurable with
 `internal/response` creates dry-run response plans. The MVP does not execute
 containment actions against real systems.
 
+Response actions that would affect hosts, egress, tools, or secrets are marked
+as requiring approval before any future execution backend can act on them.
+
 ### Dashboard
 
 `web/` provides an operational dashboard for assets, alerts, events, policies,
@@ -73,6 +80,11 @@ and dry-run response actions.
 Write endpoints can be protected with `--api-token` or `OATD_API_TOKEN`.
 Read endpoints remain available so the dashboard and health checks can load
 without embedding a token in static assets.
+
+### SIEM/Webhook Export
+
+When `--alert-webhook-url` is set, newly created alerts are sent to that
+endpoint as `oadtd.alerts` JSON payloads.
 
 ## Near-Term Production Shape
 

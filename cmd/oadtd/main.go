@@ -16,6 +16,8 @@ func main() {
 	dataPath := flag.String("data", "", "optional JSON snapshot path for local persistence")
 	policyPath := flag.String("policy", "", "optional JSON policy configuration path")
 	apiToken := flag.String("api-token", os.Getenv("OATD_API_TOKEN"), "optional API token for write endpoints")
+	alertWebhookURL := flag.String("alert-webhook-url", os.Getenv("OATD_ALERT_WEBHOOK_URL"), "optional SIEM/webhook URL for new alerts")
+	alertWebhookToken := flag.String("alert-webhook-token", os.Getenv("OATD_ALERT_WEBHOOK_TOKEN"), "optional bearer token for alert webhook")
 	withDemo := flag.Bool("demo", false, "load safe demo telemetry at startup")
 	flag.Parse()
 
@@ -34,6 +36,8 @@ func main() {
 		APIToken:          *apiToken,
 		Policy:            runtimeConfig.PolicyConfig(),
 		CorrelationWindow: window,
+		AlertWebhookURL:   *alertWebhookURL,
+		AlertWebhookToken: *alertWebhookToken,
 	})
 	if err != nil {
 		log.Fatal(err)

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/open-agentic-threat-defense/oadtd/internal/collectors"
 	"github.com/open-agentic-threat-defense/oadtd/internal/domain"
 	"github.com/open-agentic-threat-defense/oadtd/internal/telemetry"
 )
@@ -25,6 +26,10 @@ func main() {
 	}
 
 	switch os.Args[1] {
+	case "collect":
+		if err := collect(os.Args[2:]); err != nil {
+			log.Fatal(err)
+		}
 	case "replay":
 		if err := replay(os.Args[2:]); err != nil {
 			log.Fatal(err)
@@ -33,6 +38,50 @@ func main() {
 		usage()
 		os.Exit(2)
 	}
+}
+
+func collect(args []string) error {
+	fs := flag.NewFlagSet("collect", flag.ContinueOnError)
+	source := fs.String("source", "", "collector source: "+strings.Join(collectors.Sources(), ", "))
+	filePath := fs.String("file", "", "source log file, or - for stdin")
+	outputPath := fs.String("output", "-", "output JSONL file, or - for stdout")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *source == "" {
+		return errors.New("collect requires --source")
+	}
+	if *filePath == "" {
+		return errors.New("collect requires --file")
+	}
+
+	input, closeInput, err := openInput(*filePath)
+	if err != nil {
+		return err
+	}
+	defer closeInput()
+
+	events, err := collectors.Normalize(*source, input)
+	if err != nil {
+		return err
+	}
+
+	output, closeOutput, err := openOutput(*outputPath)
+	if err != nil {
+		return err
+	}
+	defer closeOutput()
+
+	encoder := json.NewEncoder(output)
+	for _, event := range events {
+		if err := encoder.Encode(event); err != nil {
+			return err
+		}
+	}
+	if *outputPath != "-" {
+		fmt.Printf("events=%d output=%s\n", len(events), *outputPath)
+	}
+	return nil
 }
 
 func replay(args []string) error {
@@ -80,16 +129,34 @@ func replay(args []string) error {
 }
 
 func readEvents(filePath string) ([]domain.Event, error) {
-	if filePath == "-" {
-		return telemetry.ReadJSONL(os.Stdin)
-	}
-
-	file, err := os.Open(filePath)
+	input, closeInput, err := openInput(filePath)
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
-	return telemetry.ReadJSONL(file)
+	defer closeInput()
+	return telemetry.ReadJSONL(input)
+}
+
+func openInput(filePath string) (io.Reader, func(), error) {
+	if filePath == "-" {
+		return os.Stdin, func() {}, nil
+	}
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, nil, err
+	}
+	return file, func() { _ = file.Close() }, nil
+}
+
+func openOutput(filePath string) (io.Writer, func(), error) {
+	if filePath == "-" {
+		return os.Stdout, func() {}, nil
+	}
+	file, err := os.Create(filePath)
+	if err != nil {
+		return nil, nil, err
+	}
+	return file, func() { _ = file.Close() }, nil
 }
 
 func postEvents(client *http.Client, baseURL string, token string, events []domain.Event) (int, error) {
@@ -129,5 +196,6 @@ func postEvents(client *http.Client, baseURL string, token string, events []doma
 
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage:")
+	fmt.Fprintln(os.Stderr, "  oadtdctl collect --source suricata-eve --file eve.json --output events.jsonl")
 	fmt.Fprintln(os.Stderr, "  oadtdctl replay --file events.jsonl [--url http://localhost:8080] [--token TOKEN]")
 }

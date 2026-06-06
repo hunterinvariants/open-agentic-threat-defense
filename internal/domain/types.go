@@ -79,14 +79,17 @@ type Alert struct {
 }
 
 type ResponseAction struct {
-	ID        string            `json:"id"`
-	Type      string            `json:"type"`
-	Mode      string            `json:"mode"`
-	AssetID   string            `json:"asset_id"`
-	Target    string            `json:"target"`
-	Reason    string            `json:"reason"`
-	CreatedAt time.Time         `json:"created_at"`
-	Metadata  map[string]string `json:"metadata"`
+	ID             string            `json:"id"`
+	Type           string            `json:"type"`
+	Mode           string            `json:"mode"`
+	AssetID        string            `json:"asset_id"`
+	Target         string            `json:"target"`
+	Reason         string            `json:"reason"`
+	CreatedAt      time.Time         `json:"created_at"`
+	ApprovalStatus string            `json:"approval_status,omitempty"`
+	ApprovedBy     string            `json:"approved_by,omitempty"`
+	ApprovedAt     *time.Time        `json:"approved_at,omitempty"`
+	Metadata       map[string]string `json:"metadata"`
 }
 
 type Asset struct {
@@ -120,4 +123,5 @@ type Status struct {
 	StorageMode      string    `json:"storage_mode"`
 	StoragePath      string    `json:"storage_path,omitempty"`
 	LastStorageError string    `json:"last_storage_error,omitempty"`
+	LastExportError  string    `json:"last_export_error,omitempty"`
 }

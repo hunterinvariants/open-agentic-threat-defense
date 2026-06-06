@@ -1,0 +1,27 @@
+name: Collector request
+description: Request or improve a defensive telemetry collector.
+title: "[collector] "
+labels: ["collector"]
+body:
+  - type: input
+    id: source
+    attributes:
+      label: Telemetry Source
+      placeholder: Sysmon, auditd, Zeek, Suricata, proxy, EDR, SIEM
+    validations:
+      required: true
+  - type: textarea
+    id: sample
+    attributes:
+      label: Redacted Sample
+      description: Provide redacted defensive log samples only. Remove secrets, usernames if sensitive, public IPs if needed, and customer identifiers.
+    validations:
+      required: true
+  - type: textarea
+    id: mapping
+    attributes:
+      label: Desired Mapping
+      description: Which OATD event fields should this populate?
+    validations:
+      required: false
+

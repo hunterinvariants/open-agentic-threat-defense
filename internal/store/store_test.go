@@ -99,3 +99,29 @@ func TestStoreSkipsDuplicateAlertFingerprintsAfterLoad(t *testing.T) {
 		t.Fatalf("expected duplicate alert to be skipped, got %d", len(added))
 	}
 }
+
+func TestStoreApprovesAction(t *testing.T) {
+	s := New()
+	action := domain.ResponseAction{
+		ID:             "act-1",
+		Type:           "isolate_host",
+		Mode:           "dry-run",
+		AssetID:        "asset-1",
+		ApprovalStatus: "required",
+		CreatedAt:      time.Now().UTC(),
+	}
+	if err := s.AddActions([]domain.ResponseAction{action}); err != nil {
+		t.Fatalf("add action: %v", err)
+	}
+
+	approved, ok, err := s.ApproveAction("act-1", "alice", time.Now().UTC())
+	if err != nil {
+		t.Fatalf("approve action: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected action to be found")
+	}
+	if approved.ApprovalStatus != "approved" || approved.ApprovedBy != "alice" || approved.ApprovedAt == nil {
+		t.Fatalf("unexpected approved action: %#v", approved)
+	}
+}

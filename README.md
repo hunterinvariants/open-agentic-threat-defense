@@ -21,6 +21,8 @@ malware behavior, or autonomous propagation. Demo data generates telemetry only.
 - `oadtdctl replay` for safe JSONL telemetry replay into the ingest API.
 - Browser dashboard with asset risk graph, alerts, events, rules, and response
   actions.
+- Alert webhook export for SIEM-style integrations.
+- systemd and Windows service starter packaging.
 - AGPLv3-or-later community license, commercial dual-license path, and CLA from
   day 1.
 
@@ -112,12 +114,14 @@ Useful endpoints:
 ## Runtime Options
 
 ```text
---addr       HTTP listen address, default :8080
---web        static dashboard directory, default web
---demo       load safe demo telemetry at startup
---data       optional JSON snapshot path for local persistence
---policy     optional JSON policy configuration path
---api-token  optional token for POST endpoints, defaults to OATD_API_TOKEN
+--addr                 HTTP listen address, default :8080
+--web                  static dashboard directory, default web
+--demo                 load safe demo telemetry at startup
+--data                 optional JSON snapshot path for local persistence
+--policy               optional JSON policy configuration path
+--api-token            optional token for POST endpoints, defaults to OATD_API_TOKEN
+--alert-webhook-url    optional SIEM/webhook URL for new alerts
+--alert-webhook-token  optional bearer token for alert webhook
 ```
 
 When `--api-token` or `OATD_API_TOKEN` is set, read endpoints remain available
@@ -158,6 +162,17 @@ Validate a file without sending it:
 ```powershell
 go run ./cmd/oadtdctl replay --file examples\demo-events.jsonl --dry-run
 ```
+
+Normalize external defensive logs to OATD JSONL:
+
+```powershell
+go run ./cmd/oadtdctl collect --source suricata-eve --file eve.json --output events.jsonl
+go run ./cmd/oadtdctl collect --source zeek-conn --file conn.log --output events.jsonl
+go run ./cmd/oadtdctl collect --source sysmon-json --file sysmon.jsonl --output events.jsonl
+go run ./cmd/oadtdctl collect --source auditd --file audit.log --output events.jsonl
+```
+
+Operations notes are in [docs/operations.md](docs/operations.md).
 
 ## License
 

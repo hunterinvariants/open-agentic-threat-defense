@@ -19,6 +19,7 @@ func ReadJSONL(r io.Reader) ([]domain.Event, error) {
 	for scanner.Scan() {
 		lineNumber++
 		line := strings.TrimSpace(scanner.Text())
+		line = strings.TrimPrefix(line, "\ufeff")
 		if line == "" {
 			continue
 		}

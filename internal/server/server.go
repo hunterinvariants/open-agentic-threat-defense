@@ -9,11 +9,13 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/open-agentic-threat-defense/oadtd/internal/correlator"
 	"github.com/open-agentic-threat-defense/oadtd/internal/domain"
+	"github.com/open-agentic-threat-defense/oadtd/internal/exporter"
 	"github.com/open-agentic-threat-defense/oadtd/internal/policy"
 	"github.com/open-agentic-threat-defense/oadtd/internal/response"
 	"github.com/open-agentic-threat-defense/oadtd/internal/store"
@@ -28,6 +30,9 @@ type App struct {
 	responder  *response.Planner
 	webDir     string
 	apiToken   string
+	webhook    exporter.Webhook
+	exportMu   sync.RWMutex
+	exportErr  string
 	startedAt  time.Time
 	counter    atomic.Uint64
 }
@@ -38,6 +43,8 @@ type Options struct {
 	APIToken          string
 	Policy            policy.Config
 	CorrelationWindow time.Duration
+	AlertWebhookURL   string
+	AlertWebhookToken string
 }
 
 func New(webDir string) *App {
@@ -66,7 +73,11 @@ func NewWithOptions(options Options) (*App, error) {
 		responder:  response.NewDryRun(),
 		webDir:     options.WebDir,
 		apiToken:   options.APIToken,
-		startedAt:  time.Now().UTC(),
+		webhook: exporter.Webhook{
+			URL:   options.AlertWebhookURL,
+			Token: options.AlertWebhookToken,
+		},
+		startedAt: time.Now().UTC(),
 	}, nil
 }
 
@@ -76,6 +87,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("/api/events", a.handleEvents)
 	mux.HandleFunc("/api/alerts", a.handleAlerts)
 	mux.HandleFunc("/api/assets", a.handleAssets)
+	mux.HandleFunc("/api/responses/approve", a.handleResponseApproval)
 	mux.HandleFunc("/api/responses", a.handleResponses)
 	mux.HandleFunc("/api/policies", a.handlePolicies)
 	mux.HandleFunc("/api/demo", a.handleDemo)
@@ -113,6 +125,7 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 		StorageMode:      storageMode,
 		StoragePath:      a.store.PersistencePath(),
 		LastStorageError: a.store.LastPersistenceError(),
+		LastExportError:  a.lastExportError(),
 	})
 }
 
@@ -163,6 +176,38 @@ func (a *App) handlePolicies(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, a.policy.Rules())
+}
+
+func (a *App) handleResponseApproval(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w)
+		return
+	}
+	var req struct {
+		ActionID   string `json:"action_id"`
+		ApprovedBy string `json:"approved_by"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if req.ActionID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("action_id is required"))
+		return
+	}
+	if req.ApprovedBy == "" {
+		req.ApprovedBy = "operator"
+	}
+	action, ok, err := a.store.ApproveAction(req.ActionID, req.ApprovedBy, time.Now().UTC())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusNotFound, errors.New("action not found"))
+		return
+	}
+	writeJSON(w, http.StatusAccepted, action)
 }
 
 func (a *App) handleResponses(w http.ResponseWriter, r *http.Request) {
@@ -228,7 +273,12 @@ func (a *App) ingest(events []domain.Event) ([]domain.Alert, error) {
 
 	alerts = append(alerts, a.correlator.Evaluate(a.store.ListEvents())...)
 	a.prepareAlerts(alerts)
-	return a.store.AddAlerts(alerts)
+	added, err := a.store.AddAlerts(alerts)
+	if err != nil {
+		return nil, err
+	}
+	a.exportAlerts(added)
+	return added, nil
 }
 
 func (a *App) prepareEvent(event *domain.Event) {
@@ -273,6 +323,29 @@ func (a *App) prepareAction(action *domain.ResponseAction) {
 
 func (a *App) nextID(prefix string) string {
 	return fmt.Sprintf("%s-%d", prefix, a.counter.Add(1))
+}
+
+func (a *App) exportAlerts(alerts []domain.Alert) {
+	if len(alerts) == 0 || a.webhook.URL == "" {
+		return
+	}
+	if err := a.webhook.ExportAlerts(alerts); err != nil {
+		a.setExportError(err.Error())
+		return
+	}
+	a.setExportError("")
+}
+
+func (a *App) setExportError(value string) {
+	a.exportMu.Lock()
+	defer a.exportMu.Unlock()
+	a.exportErr = value
+}
+
+func (a *App) lastExportError() string {
+	a.exportMu.RLock()
+	defer a.exportMu.RUnlock()
+	return a.exportErr
 }
 
 func (a *App) staticHandler() http.Handler {

@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/open-agentic-threat-defense/oadtd/internal/domain"
 )
 
 func TestWriteEndpointsRequireTokenWhenConfigured(t *testing.T) {
@@ -74,5 +76,87 @@ func TestEmptyListEndpointsReturnArrays(t *testing.T) {
 		if len(payload) != 0 {
 			t.Fatalf("%s: expected empty array, got %d entries", path, len(payload))
 		}
+	}
+}
+
+func TestResponseApprovalEndpoint(t *testing.T) {
+	app, err := NewWithOptions(Options{})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+	if _, err := app.LoadDemo(); err != nil {
+		t.Fatalf("load demo: %v", err)
+	}
+	alerts := app.store.ListAlerts()
+	if len(alerts) == 0 {
+		t.Fatal("expected demo alerts")
+	}
+
+	planReq := httptest.NewRequest(http.MethodPost, "/api/responses", strings.NewReader(`{"alert_id":"`+alerts[0].ID+`"}`))
+	planRec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(planRec, planReq)
+	if planRec.Code != http.StatusAccepted {
+		t.Fatalf("expected plan 202, got %d: %s", planRec.Code, planRec.Body.String())
+	}
+	actions := app.store.ListActions()
+	var actionID string
+	for _, action := range actions {
+		if action.ApprovalStatus == "required" {
+			actionID = action.ID
+			break
+		}
+	}
+	if actionID == "" {
+		t.Fatal("expected at least one action requiring approval")
+	}
+
+	approveReq := httptest.NewRequest(http.MethodPost, "/api/responses/approve", strings.NewReader(`{"action_id":"`+actionID+`","approved_by":"alice"}`))
+	approveRec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(approveRec, approveReq)
+	if approveRec.Code != http.StatusAccepted {
+		t.Fatalf("expected approve 202, got %d: %s", approveRec.Code, approveRec.Body.String())
+	}
+	var approved struct {
+		ApprovalStatus string `json:"approval_status"`
+		ApprovedBy     string `json:"approved_by"`
+	}
+	if err := json.Unmarshal(approveRec.Body.Bytes(), &approved); err != nil {
+		t.Fatalf("decode approval: %v", err)
+	}
+	if approved.ApprovalStatus != "approved" || approved.ApprovedBy != "alice" {
+		t.Fatalf("unexpected approval response: %#v", approved)
+	}
+}
+
+func TestAlertWebhookExportsNewAlerts(t *testing.T) {
+	exported := 0
+	webhook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Type   string         `json:"type"`
+			Alerts []domain.Alert `json:"alerts"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode webhook: %v", err)
+		}
+		if payload.Type != "oadtd.alerts" {
+			t.Fatalf("unexpected payload type: %s", payload.Type)
+		}
+		exported += len(payload.Alerts)
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer webhook.Close()
+
+	app, err := NewWithOptions(Options{AlertWebhookURL: webhook.URL})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+	if _, err := app.LoadDemo(); err != nil {
+		t.Fatalf("load demo: %v", err)
+	}
+	if exported == 0 {
+		t.Fatal("expected webhook export")
+	}
+	if app.lastExportError() != "" {
+		t.Fatalf("unexpected export error: %s", app.lastExportError())
 	}
 }

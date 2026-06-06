@@ -1,0 +1,27 @@
+name: Bug report
+description: Report a defect in defensive behavior, API, UI, or packaging.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What went wrong?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction Steps
+      description: Include commands, sample defensive telemetry, and expected vs actual behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: safety
+    attributes:
+      label: Safety Check
+      description: Do not include exploit code, credentials, malware samples, or unauthorized target details.
+    validations:
+      required: true
+

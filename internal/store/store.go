@@ -101,6 +101,25 @@ func (s *Store) AddActions(actions []domain.ResponseAction) error {
 	return s.persistLocked()
 }
 
+func (s *Store) ApproveAction(id string, approvedBy string, approvedAt time.Time) (domain.ResponseAction, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i := range s.actions {
+		if s.actions[i].ID != id {
+			continue
+		}
+		s.actions[i].ApprovalStatus = "approved"
+		s.actions[i].ApprovedBy = approvedBy
+		s.actions[i].ApprovedAt = &approvedAt
+		if err := s.persistLocked(); err != nil {
+			return domain.ResponseAction{}, true, err
+		}
+		return s.actions[i], true, nil
+	}
+	return domain.ResponseAction{}, false, nil
+}
+
 func (s *Store) ListActions() []domain.ResponseAction {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
