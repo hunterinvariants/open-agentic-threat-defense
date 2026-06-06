@@ -96,6 +96,6 @@ runner ALL=(root) NOPASSWD: /usr/bin/install, /bin/ln, /bin/rm, /bin/chown, /bin
 EOF
 chmod 0440 /etc/sudoers.d/oadtd-runner
 
-sudo -u "$runner_user" bash -lc "cd '$runner_dir' && ./svc.sh install"
+sudo bash -lc "cd '$runner_dir' && ./svc.sh install"
 sudo bash -lc "cd '$runner_dir' && ./svc.sh start"
 sudo bash -lc "cd '$runner_dir' && ./svc.sh status"
