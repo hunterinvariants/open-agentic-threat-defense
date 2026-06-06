@@ -18,6 +18,7 @@ malware behavior, or autonomous propagation. Demo data generates telemetry only.
 - Dry-run response planner for host isolation, egress blocking, tool disabling,
   ticket creation, and secret rotation.
 - Optional token protection for write endpoints.
+- `oadtdctl replay` for safe JSONL telemetry replay into the ingest API.
 - Browser dashboard with asset risk graph, alerts, events, rules, and response
   actions.
 - AGPLv3-or-later community license, commercial dual-license path, and CLA from
@@ -62,6 +63,12 @@ $env:GOTELEMETRY="off"
 $env:GOCACHE="$PWD\.cache\go-build"
 $env:GOMODCACHE="$PWD\.cache\go-mod"
 go test ./...
+```
+
+Replay safe JSONL telemetry into a running server:
+
+```powershell
+go run ./cmd/oadtdctl replay --file examples\demo-events.jsonl
 ```
 
 ## API
@@ -130,6 +137,27 @@ The policy file is JSON:
 ```
 
 See [configs/example.policy.json](configs/example.policy.json).
+
+## Telemetry Replay
+
+`oadtdctl replay` reads newline-delimited JSON events and posts them to
+`/api/events`.
+
+```powershell
+go run ./cmd/oadtdctl replay --file examples\demo-events.jsonl --url http://localhost:8080
+```
+
+With write-token protection:
+
+```powershell
+go run ./cmd/oadtdctl replay --file examples\demo-events.jsonl --token $env:OATD_API_TOKEN
+```
+
+Validate a file without sending it:
+
+```powershell
+go run ./cmd/oadtdctl replay --file examples\demo-events.jsonl --dry-run
+```
 
 ## License
 

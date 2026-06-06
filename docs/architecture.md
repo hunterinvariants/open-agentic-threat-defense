@@ -18,6 +18,13 @@ signals that are often handled separately:
 `cmd/oadtd` starts a local HTTP service and serves both API endpoints and the
 static dashboard.
 
+### Replay Client
+
+`cmd/oadtdctl` provides operational helper commands. The first command,
+`replay`, reads newline-delimited JSON events and sends them to the ingest API.
+This gives teams a safe way to replay logs and simulation traces without adding
+offensive behavior.
+
 ### Domain Model
 
 `internal/domain` defines the shared event, alert, asset, rule, and response
@@ -74,7 +81,7 @@ storage, and response execution:
 
 ```mermaid
 flowchart LR
-  A["Collectors"] --> B["Ingest API"]
+  A["Collectors / Replay Client"] --> B["Ingest API"]
   B --> C["Event Store"]
   C --> D["Policy Engine"]
   C --> E["Correlator"]

@@ -1,0 +1,6 @@
+{"kind":"host_observation","asset_id":"lab-agent-01","hostname":"lab-agent-01","source_ip":"10.10.4.21","signal":"endpoint enrolled","labels":["linux","agent"]}
+{"kind":"process_start","asset_id":"lab-agent-01","hostname":"lab-agent-01","source_ip":"10.10.4.21","process":"bash","command":"whoami; ip addr; netstat -tulpen","signal":"discovery sequence","labels":["discovery"]}
+{"kind":"agent_tool_call","asset_id":"lab-agent-01","hostname":"lab-agent-01","actor":"local-agent","tool_name":"shell_exec","command":"read env token for connector troubleshooting","signal":"agent tool referenced token material","labels":["agent","credential"]}
+{"kind":"network_flow","asset_id":"lab-agent-01","hostname":"lab-agent-01","source_ip":"10.10.4.21","destination":"203.0.113.88:443","signal":"new outbound flow after discovery","labels":["egress"]}
+{"kind":"deception_hit","asset_id":"lab-agent-02","hostname":"lab-agent-02","source_ip":"10.10.4.31","destination":"canary-token-vault","signal":"honey credential accessed by agent process","labels":["deception","canary","agent"]}
+

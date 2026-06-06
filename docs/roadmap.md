@@ -10,6 +10,7 @@
 - Optional JSON snapshot persistence.
 - Optional token protection for write endpoints.
 - JSON policy configuration for tool, egress, and correlation-window defaults.
+- Safe JSONL telemetry replay client.
 - AGPLv3-or-later plus commercial dual-license path.
 - CLA requirement from day 1.
 
@@ -22,6 +23,7 @@ Status: implemented in this repository.
 - Policy reload without restart.
 - Signed tool manifests for AI-agent and MCP surfaces.
 - Collector adapters for Sysmon, auditd, Zeek, Suricata, and proxy logs.
+- JSONL replay batching, backoff, and structured import reports.
 - Export to SIEM via webhook or JSONL.
 - Basic installer and service wrapper.
 - CLA automation for pull requests.
