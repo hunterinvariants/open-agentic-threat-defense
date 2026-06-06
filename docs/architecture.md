@@ -19,7 +19,7 @@ signals that are often handled separately:
 static dashboard. The service also exposes `GET /healthz` and `GET /readyz`
 for process and Postgres readiness checks.
 
-### Replay Client
+### Replay and Collector Clients
 
 `cmd/oadtdctl` provides operational helper commands. The first command,
 `replay`, reads newline-delimited JSON events and sends them to the ingest API.
@@ -29,6 +29,11 @@ offensive behavior.
 The `collect` command normalizes supported defensive telemetry sources into
 OATD JSONL. Current sources are Sysmon JSON, auditd text, Zeek conn logs, and
 Suricata EVE JSON.
+
+The `agent` command is a long-running collector that tails a source file,
+persists its offset state, normalizes newly appended content, and posts event
+batches to the ingest API. It is intended for lab and lightweight deployment
+scenarios where a direct file tail is enough.
 
 ### Domain Model
 
@@ -72,7 +77,9 @@ appear on the same asset. The window is configurable with
 containment actions against real systems.
 
 Response actions that would affect hosts, egress, tools, or secrets are marked
-as requiring approval before any future execution backend can act on them.
+as requiring approval before any execution backend can act on them. Approved
+actions can be exported to an external webhook transport, which keeps the
+execution gate outside the core service.
 
 ### Dashboard
 
@@ -98,6 +105,9 @@ events are first-class store records and are persisted to Postgres table
 
 When `--alert-webhook-url` is set, newly created alerts are sent to that
 endpoint as `oadtd.alerts` JSON payloads.
+
+When `--response-webhook-url` is set, approved response actions are exported as
+`oadtd.response_action` payloads after approval.
 
 ## Near-Term Production Shape
 

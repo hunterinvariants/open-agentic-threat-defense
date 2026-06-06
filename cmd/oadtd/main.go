@@ -19,6 +19,8 @@ func main() {
 	apiToken := flag.String("api-token", os.Getenv("OATD_API_TOKEN"), "optional API token for write endpoints")
 	alertWebhookURL := flag.String("alert-webhook-url", os.Getenv("OATD_ALERT_WEBHOOK_URL"), "optional SIEM/webhook URL for new alerts")
 	alertWebhookToken := flag.String("alert-webhook-token", os.Getenv("OATD_ALERT_WEBHOOK_TOKEN"), "optional bearer token for alert webhook")
+	responseWebhookURL := flag.String("response-webhook-url", os.Getenv("OATD_RESPONSE_WEBHOOK_URL"), "optional webhook URL for approved response actions")
+	responseWebhookToken := flag.String("response-webhook-token", os.Getenv("OATD_RESPONSE_WEBHOOK_TOKEN"), "optional bearer token for response webhook")
 	withDemo := flag.Bool("demo", false, "load safe demo telemetry at startup")
 	flag.Parse()
 
@@ -32,15 +34,17 @@ func main() {
 	}
 
 	app, err := server.NewWithOptions(server.Options{
-		WebDir:            *webDir,
-		DataPath:          *dataPath,
-		PostgresDSN:       *postgresDSN,
-		APIToken:          *apiToken,
-		Users:             runtimeConfig.Users,
-		Policy:            runtimeConfig.PolicyConfig(),
-		CorrelationWindow: window,
-		AlertWebhookURL:   *alertWebhookURL,
-		AlertWebhookToken: *alertWebhookToken,
+		WebDir:               *webDir,
+		DataPath:             *dataPath,
+		PostgresDSN:          *postgresDSN,
+		APIToken:             *apiToken,
+		Users:                runtimeConfig.Users,
+		Policy:               runtimeConfig.PolicyConfig(),
+		CorrelationWindow:    window,
+		AlertWebhookURL:      *alertWebhookURL,
+		AlertWebhookToken:    *alertWebhookToken,
+		ResponseWebhookURL:   *responseWebhookURL,
+		ResponseWebhookToken: *responseWebhookToken,
 	})
 	if err != nil {
 		log.Fatal(err)

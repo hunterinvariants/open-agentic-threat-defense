@@ -26,29 +26,32 @@ import (
 const Version = "0.1.0-mvp"
 
 type App struct {
-	store      *store.Store
-	policy     *policy.Engine
-	correlator *correlator.Correlator
-	responder  *response.Planner
-	webDir     string
-	auth       *auth.Authenticator
-	webhook    exporter.Webhook
-	exportMu   sync.RWMutex
-	exportErr  string
-	startedAt  time.Time
-	counter    atomic.Uint64
+	store           *store.Store
+	policy          *policy.Engine
+	correlator      *correlator.Correlator
+	responder       *response.Planner
+	webDir          string
+	auth            *auth.Authenticator
+	webhook         exporter.Webhook
+	responseWebhook exporter.Webhook
+	exportMu        sync.RWMutex
+	exportErr       string
+	startedAt       time.Time
+	counter         atomic.Uint64
 }
 
 type Options struct {
-	WebDir            string
-	DataPath          string
-	PostgresDSN       string
-	APIToken          string
-	Users             []auth.UserConfig
-	Policy            policy.Config
-	CorrelationWindow time.Duration
-	AlertWebhookURL   string
-	AlertWebhookToken string
+	WebDir               string
+	DataPath             string
+	PostgresDSN          string
+	APIToken             string
+	Users                []auth.UserConfig
+	Policy               policy.Config
+	CorrelationWindow    time.Duration
+	AlertWebhookURL      string
+	AlertWebhookToken    string
+	ResponseWebhookURL   string
+	ResponseWebhookToken string
 }
 
 func New(webDir string) *App {
@@ -86,6 +89,10 @@ func NewWithOptions(options Options) (*App, error) {
 		webhook: exporter.Webhook{
 			URL:   options.AlertWebhookURL,
 			Token: options.AlertWebhookToken,
+		},
+		responseWebhook: exporter.Webhook{
+			URL:   options.ResponseWebhookURL,
+			Token: options.ResponseWebhookToken,
 		},
 		startedAt: time.Now().UTC(),
 	}, nil
@@ -367,6 +374,28 @@ func (a *App) handleResponseApproval(w http.ResponseWriter, r *http.Request) {
 		"asset_id":    action.AssetID,
 		"action_type": action.Type,
 	})
+	executionStatus := "not_configured"
+	executionError := ""
+	if a.responseWebhook.URL != "" {
+		if err := a.responseWebhook.ExportResponseAction(action); err != nil {
+			executionStatus = "failed"
+			executionError = err.Error()
+			a.recordAudit(r, principal, "responses.execute", "response_action", action.ID, "failed", map[string]string{
+				"error": err.Error(),
+			})
+		} else {
+			executionStatus = "sent"
+			a.recordAudit(r, principal, "responses.execute", "response_action", action.ID, "accepted", map[string]string{
+				"transport": "webhook",
+			})
+		}
+	}
+	if recorded, ok, err := a.store.RecordActionExecution(action.ID, time.Now().UTC(), executionStatus, executionError); err == nil && ok {
+		action = recorded
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
 	writeJSON(w, http.StatusAccepted, action)
 }
 

@@ -278,6 +278,74 @@ func TestResponseApprovalEndpoint(t *testing.T) {
 	}
 }
 
+func TestResponseApprovalExecutesWebhook(t *testing.T) {
+	var got struct {
+		Type   string `json:"type"`
+		Action struct {
+			ID string `json:"id"`
+		} `json:"response_action"`
+	}
+	webhook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode response webhook: %v", err)
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer webhook.Close()
+
+	app, err := NewWithOptions(Options{
+		ResponseWebhookURL: webhook.URL,
+	})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+	if _, err := app.LoadDemo(); err != nil {
+		t.Fatalf("load demo: %v", err)
+	}
+	alerts := app.store.ListAlerts()
+	if len(alerts) == 0 {
+		t.Fatal("expected demo alerts")
+	}
+
+	planReq := httptest.NewRequest(http.MethodPost, "/api/responses", strings.NewReader(`{"alert_id":"`+alerts[0].ID+`"}`))
+	planRec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(planRec, planReq)
+	if planRec.Code != http.StatusAccepted {
+		t.Fatalf("expected plan 202, got %d: %s", planRec.Code, planRec.Body.String())
+	}
+
+	actions := app.store.ListActions()
+	var actionID string
+	for _, action := range actions {
+		if action.ApprovalStatus == "required" {
+			actionID = action.ID
+			break
+		}
+	}
+	if actionID == "" {
+		t.Fatal("expected at least one action requiring approval")
+	}
+
+	approveReq := httptest.NewRequest(http.MethodPost, "/api/responses/approve", strings.NewReader(`{"action_id":"`+actionID+`","approved_by":"alice"}`))
+	approveRec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(approveRec, approveReq)
+	if approveRec.Code != http.StatusAccepted {
+		t.Fatalf("expected approve 202, got %d: %s", approveRec.Code, approveRec.Body.String())
+	}
+	var approved struct {
+		ExecutionStatus string `json:"execution_status"`
+	}
+	if err := json.Unmarshal(approveRec.Body.Bytes(), &approved); err != nil {
+		t.Fatalf("decode approval: %v", err)
+	}
+	if approved.ExecutionStatus != "sent" {
+		t.Fatalf("expected execution status sent, got %#v", approved)
+	}
+	if got.Type != "oadtd.response_action" || got.Action.ID != actionID {
+		t.Fatalf("unexpected response webhook payload: %#v", got)
+	}
+}
+
 func TestAlertWebhookExportsNewAlerts(t *testing.T) {
 	exported := 0
 	webhook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

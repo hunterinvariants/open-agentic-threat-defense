@@ -143,6 +143,29 @@ func (s *Store) ApproveAction(id string, approvedBy string, approvedAt time.Time
 	return domain.ResponseAction{}, false, nil
 }
 
+func (s *Store) RecordActionExecution(id string, executedAt time.Time, status string, executionErr string) (domain.ResponseAction, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i := range s.actions {
+		if s.actions[i].ID != id {
+			continue
+		}
+		s.actions[i].ExecutionStatus = status
+		s.actions[i].ExecutedAt = &executedAt
+		s.actions[i].ExecutionError = executionErr
+		if err := s.persistActionsLocked([]domain.ResponseAction{s.actions[i]}); err != nil {
+			s.lastErr = err.Error()
+			return domain.ResponseAction{}, true, err
+		}
+		if err := s.persistLocked(); err != nil {
+			return domain.ResponseAction{}, true, err
+		}
+		return s.actions[i], true, nil
+	}
+	return domain.ResponseAction{}, false, nil
+}
+
 func (s *Store) ListActions() []domain.ResponseAction {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

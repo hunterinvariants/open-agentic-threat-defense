@@ -31,3 +31,26 @@ func TestWebhookExportsAlerts(t *testing.T) {
 		t.Fatalf("unexpected payload: %#v", got)
 	}
 }
+
+func TestWebhookExportsResponseAction(t *testing.T) {
+	var got ResponseActionPayload
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer token" {
+			t.Fatalf("missing authorization header")
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	webhook := Webhook{URL: server.URL, Token: "token", Client: server.Client()}
+	err := webhook.ExportResponseAction(domain.ResponseAction{ID: "act-1", Type: "isolate_host", ApprovalStatus: "approved"})
+	if err != nil {
+		t.Fatalf("export response action: %v", err)
+	}
+	if got.Type != "oadtd.response_action" || got.ResponseAction.ID != "act-1" {
+		t.Fatalf("unexpected payload: %#v", got)
+	}
+}

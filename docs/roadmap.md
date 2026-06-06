@@ -13,8 +13,9 @@
 - JSON policy configuration for tool, egress, and correlation-window defaults.
 - Safe JSONL telemetry replay client.
 - Collector normalizers for Sysmon JSON, auditd, Zeek conn, and Suricata EVE.
+- Long-running collector agents for Sysmon, auditd, Zeek, and Suricata.
 - Alert webhook export.
-- Response approval state for planned actions.
+- Response approval state for planned actions and webhook-based execution export.
 - Audit logging for authentication, RBAC, ingestion, planning, and approval
   events.
 - Docker Compose Postgres service plus optional Postgres integration test.
@@ -32,7 +33,6 @@ Status: implemented in this repository.
 - Session-based dashboard login on top of token/RBAC API.
 - Policy reload without restart.
 - Signed tool manifests for AI-agent and MCP surfaces.
-- Long-running collector agents for Sysmon, auditd, Zeek, Suricata, and proxy logs.
 - JSONL replay batching, backoff, and structured import reports.
 - Export to SIEM via webhook or JSONL.
 - Basic installer and service wrapper.
@@ -44,7 +44,7 @@ Status: implemented in this repository.
 - Organization-level RBAC policies.
 - Policy packs.
 - Deception token registry.
-- Response approvals.
+- Response approvals and execution export.
 - Integration tests with replayed telemetry and Postgres-backed API smoke tests.
 - Windows and Linux packaging.
 - Better asset graph and investigation timeline.

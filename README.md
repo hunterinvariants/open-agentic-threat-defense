@@ -18,11 +18,13 @@ malware behavior, or autonomous propagation. Demo data generates telemetry only.
 - Correlator for multi-signal sequences such as discovery, credential touch,
   agent tool call, and outbound flow.
 - Dry-run response planner for host isolation, egress blocking, tool disabling,
-  ticket creation, and secret rotation.
+  ticket creation, and secret rotation, with approval-gated execution export.
 - User/token authentication with role-based access control.
 - Audit log for authentication failures, RBAC denials, ingestion, response
   planning, and response approvals.
 - `oadtdctl replay` for safe JSONL telemetry replay into the ingest API.
+- `oadtdctl agent` for long-running tail-based collection from supported
+  defensive telemetry sources.
 - Browser dashboard with asset risk graph, alerts, events, rules, and response
   actions, plus session-based dashboard login.
 - Alert webhook export for SIEM-style integrations.
@@ -86,6 +88,14 @@ Go modules and GitHub Actions.
 
 Postgres operators can create and restore portable JSON backups with
 `oadtdctl backup` and `oadtdctl restore`.
+
+Approved response actions can be exported to an external webhook transport
+after operator approval by setting:
+
+```text
+--response-webhook-url    optional webhook URL for approved response actions
+--response-webhook-token  optional bearer token for response webhook
+```
 
 Run the optional Postgres integration test:
 
@@ -154,6 +164,8 @@ Useful endpoints:
 --api-token            legacy admin token, defaults to OATD_API_TOKEN
 --alert-webhook-url    optional SIEM/webhook URL for new alerts
 --alert-webhook-token  optional bearer token for alert webhook
+--response-webhook-url optional webhook URL for approved response actions
+--response-webhook-token optional bearer token for response webhook
 ```
 
 When users are configured in the policy file, all API endpoints require
@@ -231,6 +243,13 @@ go run ./cmd/oadtdctl collect --source suricata-eve --file eve.json --output eve
 go run ./cmd/oadtdctl collect --source zeek-conn --file conn.log --output events.jsonl
 go run ./cmd/oadtdctl collect --source sysmon-json --file sysmon.jsonl --output events.jsonl
 go run ./cmd/oadtdctl collect --source auditd --file audit.log --output events.jsonl
+```
+
+Run a long-lived collector agent that tails a source file and posts batches to
+the ingest API:
+
+```powershell
+go run ./cmd/oadtdctl agent --source sysmon-json --file sysmon.jsonl --url http://localhost:8080 --state-file .cache\agent-state.json
 ```
 
 Operations notes are in [docs/operations.md](docs/operations.md).

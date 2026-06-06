@@ -67,6 +67,16 @@ go run ./cmd/oadtd --demo
 
 The payload type is `oadtd.alerts`.
 
+Approved response actions can also be exported to a webhook transport:
+
+```powershell
+$env:OATD_RESPONSE_WEBHOOK_URL="https://soar.example.invalid/oatd"
+$env:OATD_RESPONSE_WEBHOOK_TOKEN="replace-with-token"
+go run ./cmd/oadtd --demo
+```
+
+The payload type is `oadtd.response_action`.
+
 ## Storage
 
 Production durable storage is Postgres via `--postgres-dsn` or
@@ -96,6 +106,20 @@ go run ./cmd/oadtdctl restore --postgres-dsn $env:OATD_POSTGRES_DSN --input back
 
 The service also exposes `GET /healthz` and `GET /readyz` for process and
 database readiness checks.
+
+## Collector Agents
+
+Long-running collector agents tail source files, persist offsets, normalize new
+content, and submit batches to the ingest API.
+
+Example:
+
+```powershell
+go run ./cmd/oadtdctl agent --source sysmon-json --file sysmon.jsonl --url http://localhost:8080 --state-file .cache\agent-state.json
+```
+
+Use `--once` for a single pass over the current file contents, or omit it to
+keep polling for appended telemetry.
 
 ## Audit Log
 

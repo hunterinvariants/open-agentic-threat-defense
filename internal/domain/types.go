@@ -79,17 +79,20 @@ type Alert struct {
 }
 
 type ResponseAction struct {
-	ID             string            `json:"id"`
-	Type           string            `json:"type"`
-	Mode           string            `json:"mode"`
-	AssetID        string            `json:"asset_id"`
-	Target         string            `json:"target"`
-	Reason         string            `json:"reason"`
-	CreatedAt      time.Time         `json:"created_at"`
-	ApprovalStatus string            `json:"approval_status,omitempty"`
-	ApprovedBy     string            `json:"approved_by,omitempty"`
-	ApprovedAt     *time.Time        `json:"approved_at,omitempty"`
-	Metadata       map[string]string `json:"metadata"`
+	ID              string            `json:"id"`
+	Type            string            `json:"type"`
+	Mode            string            `json:"mode"`
+	AssetID         string            `json:"asset_id"`
+	Target          string            `json:"target"`
+	Reason          string            `json:"reason"`
+	CreatedAt       time.Time         `json:"created_at"`
+	ApprovalStatus  string            `json:"approval_status,omitempty"`
+	ApprovedBy      string            `json:"approved_by,omitempty"`
+	ApprovedAt      *time.Time        `json:"approved_at,omitempty"`
+	ExecutionStatus string            `json:"execution_status,omitempty"`
+	ExecutedAt      *time.Time        `json:"executed_at,omitempty"`
+	ExecutionError  string            `json:"execution_error,omitempty"`
+	Metadata        map[string]string `json:"metadata"`
 }
 
 type Asset struct {
