@@ -71,3 +71,61 @@ func TestTenantPolicyAPIRequiresAuth(t *testing.T) {
 		t.Fatalf("unauthenticated tenant policy write must be 401, got %d", rec.Code)
 	}
 }
+
+func TestTenantPolicyEnforcedOnMCPProxy(t *testing.T) {
+	// Upstream MCP server that echoes a JSON-RPC result for forwarded calls.
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"ok":true}}`))
+	}))
+	defer upstream.Close()
+
+	// APIToken => legacy admin principal whose tenant is "default".
+	app, err := NewWithOptions(Options{APIToken: "secret", MCPUpstreamURL: upstream.URL})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+
+	send := func(method, path, body string) *httptest.ResponseRecorder {
+		var r *http.Request
+		if body == "" {
+			r = httptest.NewRequest(method, path, nil)
+		} else {
+			r = httptest.NewRequest(method, path, strings.NewReader(body))
+		}
+		r.Header.Set("Authorization", "Bearer secret")
+		rec := httptest.NewRecorder()
+		app.Routes().ServeHTTP(rec, r)
+		return rec
+	}
+
+	// An intercepted MCP tool call naming a globally approved tool.
+	mcpCallCode := func() int {
+		return send(http.MethodPost, "/api/mcp/proxy",
+			`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"asset_inventory"}}`).Code
+	}
+
+	// Baseline: asset_inventory is globally approved, so the call is gated-allow and forwarded.
+	if code := mcpCallCode(); code == http.StatusForbidden {
+		t.Fatalf("baseline asset_inventory must not be blocked on the MCP proxy, got %d", code)
+	}
+
+	// Install an org-scoped overlay for "default" that excludes asset_inventory.
+	if rec := send(http.MethodPut, "/api/policy/tenants", `{"tenant_id":"default","approved_tools":["deploy"]}`); rec.Code != http.StatusOK {
+		t.Fatalf("set tenant policy: expected 200, got %d (%s)", rec.Code, rec.Body.String())
+	}
+
+	// Regression: the overlay must be enforced on the MCP proxy path too.
+	if code := mcpCallCode(); code != http.StatusForbidden {
+		t.Fatalf("tenant overlay must deny asset_inventory on the MCP proxy, got %d", code)
+	}
+
+	// Remove the overlay; the call falls back to the global allow and forwards again.
+	if rec := send(http.MethodDelete, "/api/policy/tenants?tenant_id=default", ""); rec.Code != http.StatusOK {
+		t.Fatalf("delete tenant policy: expected 200, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	if code := mcpCallCode(); code == http.StatusForbidden {
+		t.Fatalf("after removal asset_inventory must not be blocked on the MCP proxy, got %d", code)
+	}
+}

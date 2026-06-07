@@ -85,10 +85,11 @@ func (a *App) handleMCPProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if shouldInterceptMCPMethod(rpc.Method) {
-		toolCall := a.toolCallFromMCPRequest(rpc)
-		decision := a.policy.GateToolCall(toolCall)
 		principal := principalFromRequest(r)
 		tenant := tenantForPrincipal(principal)
+		toolCall := a.toolCallFromMCPRequest(rpc)
+		toolCall.Tenant = tenant
+		decision := a.policy.GateToolCall(toolCall)
 		a.prepareAlerts(decision.Alerts, tenant)
 		added, err := a.addAlertsForTenant(decision.Alerts, tenant)
 		if err != nil {
