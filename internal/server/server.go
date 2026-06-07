@@ -379,6 +379,24 @@ func (a *App) handleGatewayDecision(w http.ResponseWriter, r *http.Request) {
 	decision.Alerts = added
 	decision.RecommendedActions = a.recommendedActionsForAlerts(added)
 	principal := principalFromRequest(r)
+	switch decision.Verdict {
+	case domain.GatewayRequireApproval:
+		action := a.gatewayActionFromDecision(req, decision, "required", "")
+		a.prepareAction(&action)
+		if err := a.store.AddActions([]domain.ResponseAction{action}); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		decision.Action = &action
+	case domain.GatewayDeny:
+		action := a.gatewayActionFromDecision(req, decision, "not_required", "blocked")
+		a.prepareAction(&action)
+		if err := a.store.AddActions([]domain.ResponseAction{action}); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		decision.Action = &action
+	}
 	a.recordAudit(r, principal, "gateway.decide", "tool_call", decision.RequestID, string(decision.Verdict), map[string]string{
 		"tool":        decision.ToolName,
 		"asset_id":    req.AssetID,
@@ -387,6 +405,7 @@ func (a *App) handleGatewayDecision(w http.ResponseWriter, r *http.Request) {
 		"alerts":      fmt.Sprintf("%d", len(added)),
 		"reason":      decision.Reason,
 		"destination": req.Destination,
+		"action_id":   decisionActionID(decision.Action),
 	})
 	writeJSON(w, http.StatusAccepted, decision)
 }
@@ -445,6 +464,10 @@ func (a *App) handleResponseApproval(w http.ResponseWriter, r *http.Request) {
 	}
 	action, ok, err := a.store.ApproveAction(req.ActionID, req.ApprovedBy, time.Now().UTC())
 	if err != nil {
+		if strings.Contains(err.Error(), "blocked gateway actions cannot be approved") {
+			writeError(w, http.StatusConflict, err)
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -594,6 +617,9 @@ func (a *App) executeTicketAction(r *http.Request, principal auth.Principal, act
 }
 
 func (a *App) executeResponseAction(r *http.Request, principal auth.Principal, action domain.ResponseAction) (domain.ResponseAction, error) {
+	if action.Type == "gateway_tool_call" {
+		return a.executeGatewayToolAction(r, principal, action)
+	}
 	status := "not_configured"
 	executionError := ""
 	if a.github.Enabled() && a.github.WorkflowFile != "" {
@@ -636,6 +662,38 @@ func (a *App) executeResponseAction(r *http.Request, principal auth.Principal, a
 	action.ExecutionStatus = status
 	action.ExecutionError = executionError
 	action.ExecutedAt = &now
+	return action, nil
+}
+
+func (a *App) executeGatewayToolAction(r *http.Request, principal auth.Principal, action domain.ResponseAction) (domain.ResponseAction, error) {
+	now := time.Now().UTC()
+	if action.ApprovalStatus != "approved" {
+		action.ApprovalStatus = "approved"
+	}
+	action.ExecutionStatus = "proceeded"
+	action.ExecutionError = ""
+	action.ExecutedAt = &now
+	if action.Metadata == nil {
+		action.Metadata = make(map[string]string)
+	}
+	action.Metadata["gateway_execution"] = "proceeded"
+	action.Metadata["gateway_executed_at"] = now.Format(time.RFC3339)
+	recorded, ok, err := a.store.RecordActionExecution(action.ID, now, action.ExecutionStatus, action.ExecutionError)
+	if err != nil {
+		return domain.ResponseAction{}, err
+	}
+	if ok {
+		action = recorded
+	} else {
+		_ = a.store.AddActions([]domain.ResponseAction{action})
+	}
+	a.recordAudit(r, principal, "gateway.execute", "response_action", action.ID, "accepted", map[string]string{
+		"tool":       action.Target,
+		"asset_id":   action.AssetID,
+		"request_id": action.Metadata["request_id"],
+		"verdict":    action.Metadata["verdict"],
+		"execution":  action.ExecutionStatus,
+	})
 	return action, nil
 }
 
@@ -697,6 +755,62 @@ func (a *App) prepareAction(action *domain.ResponseAction) {
 	if action.Metadata == nil {
 		action.Metadata = make(map[string]string)
 	}
+}
+
+func (a *App) gatewayActionFromDecision(request domain.ToolCallRequest, decision domain.ToolCallDecision, approvalStatus string, executionStatus string) domain.ResponseAction {
+	action := domain.ResponseAction{
+		Type:            "gateway_tool_call",
+		Mode:            "inline",
+		AssetID:         request.AssetID,
+		Target:          request.ToolName,
+		Reason:          decision.Reason,
+		ApprovalStatus:  approvalStatus,
+		ExecutionStatus: executionStatus,
+		Metadata:        cloneStringMap(request.Metadata),
+	}
+	if action.Metadata == nil {
+		action.Metadata = make(map[string]string)
+	}
+	action.Metadata["request_id"] = request.ID
+	action.Metadata["tool"] = strings.TrimSpace(strings.ToLower(request.ToolName))
+	action.Metadata["actor"] = request.Actor
+	action.Metadata["hostname"] = request.Hostname
+	action.Metadata["verdict"] = string(decision.Verdict)
+	action.Metadata["risk"] = string(decision.Risk)
+	if request.Destination != "" {
+		action.Metadata["destination"] = request.Destination
+	}
+	if request.Signal != "" {
+		action.Metadata["signal"] = request.Signal
+	}
+	if request.Command != "" {
+		action.Metadata["command"] = request.Command
+	}
+	if request.Arguments != "" {
+		action.Metadata["arguments"] = request.Arguments
+	}
+	if len(request.Labels) > 0 {
+		action.Metadata["labels"] = strings.Join(request.Labels, ",")
+	}
+	return action
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	cloned := make(map[string]string, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func decisionActionID(action *domain.ResponseAction) string {
+	if action == nil {
+		return ""
+	}
+	return action.ID
 }
 
 func (a *App) prepareToolCallRequest(request *domain.ToolCallRequest) {

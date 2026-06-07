@@ -165,9 +165,15 @@ func TestGatewayDecisionEndpoint(t *testing.T) {
 		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
 	}
 	var decision struct {
-		Verdict            string `json:"verdict"`
-		Reason             string `json:"reason"`
-		ToolName           string `json:"tool_name"`
+		Verdict  string `json:"verdict"`
+		Reason   string `json:"reason"`
+		ToolName string `json:"tool_name"`
+		Action   struct {
+			ID              string `json:"id"`
+			Type            string `json:"type"`
+			ApprovalStatus  string `json:"approval_status"`
+			ExecutionStatus string `json:"execution_status"`
+		} `json:"action"`
 		RecommendedActions []struct {
 			Type string `json:"type"`
 		} `json:"recommended_actions"`
@@ -184,6 +190,9 @@ func TestGatewayDecisionEndpoint(t *testing.T) {
 	if decision.ToolName != "asset_inventory" {
 		t.Fatalf("unexpected tool name: %#v", decision)
 	}
+	if decision.Action.ID == "" || decision.Action.Type != "gateway_tool_call" || decision.Action.ApprovalStatus != "required" {
+		t.Fatalf("expected pending gateway action: %#v", decision.Action)
+	}
 	if len(decision.Alerts) == 0 {
 		t.Fatalf("expected alerts in gateway decision: %#v", decision)
 	}
@@ -196,6 +205,136 @@ func TestGatewayDecisionEndpoint(t *testing.T) {
 	}
 	if len(app.store.ListAlerts()) == 0 {
 		t.Fatal("expected gateway alerts to be stored")
+	}
+}
+
+func TestGatewayDecisionApprovalReleasesStubTool(t *testing.T) {
+	app, err := NewWithOptions(Options{})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/decide", strings.NewReader(`{
+		"asset_id":"agent-1",
+		"hostname":"agent-1",
+		"actor":"local-agent",
+		"tool_name":"asset_inventory",
+		"command":"inventory scan",
+		"arguments":"token=abc123"
+	}`))
+	rec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var decision struct {
+		Action struct {
+			ID string `json:"id"`
+		} `json:"action"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &decision); err != nil {
+		t.Fatalf("decode gateway decision: %v", err)
+	}
+	if decision.Action.ID == "" {
+		t.Fatal("expected pending action")
+	}
+
+	approveReq := httptest.NewRequest(http.MethodPost, "/api/responses/approve", strings.NewReader(`{"action_id":"`+decision.Action.ID+`","approved_by":"alice"}`))
+	approveRec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(approveRec, approveReq)
+	if approveRec.Code != http.StatusAccepted {
+		t.Fatalf("expected approval 202, got %d: %s", approveRec.Code, approveRec.Body.String())
+	}
+	var approved struct {
+		ExecutionStatus string `json:"execution_status"`
+	}
+	if err := json.Unmarshal(approveRec.Body.Bytes(), &approved); err != nil {
+		t.Fatalf("decode approval: %v", err)
+	}
+	if approved.ExecutionStatus != "proceeded" {
+		t.Fatalf("expected gateway execution to proceed, got %#v", approved)
+	}
+}
+
+func TestGatewayDecisionCanaryBlocksAndRecordsEvidence(t *testing.T) {
+	app, err := NewWithOptions(Options{})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/decide", strings.NewReader(`{
+		"asset_id":"agent-1",
+		"hostname":"agent-1",
+		"actor":"local-agent",
+		"tool_name":"asset_inventory",
+		"command":"read protected vault",
+		"labels":["canary","deception"]
+	}`))
+	rec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var decision struct {
+		Verdict string `json:"verdict"`
+		Action  struct {
+			ID              string `json:"id"`
+			ExecutionStatus string `json:"execution_status"`
+		} `json:"action"`
+		Alerts []struct {
+			RuleID string `json:"rule_id"`
+		} `json:"alerts"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &decision); err != nil {
+		t.Fatalf("decode gateway decision: %v", err)
+	}
+	if decision.Verdict != "deny" {
+		t.Fatalf("expected deny verdict, got %#v", decision)
+	}
+	if decision.Action.ID == "" || decision.Action.ExecutionStatus != "blocked" {
+		t.Fatalf("expected blocked containment evidence, got %#v", decision.Action)
+	}
+	if len(decision.Alerts) == 0 {
+		t.Fatal("expected canary alerts")
+	}
+}
+
+func TestBlockedGatewayActionCannotBeApproved(t *testing.T) {
+	app, err := NewWithOptions(Options{})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/decide", strings.NewReader(`{
+		"asset_id":"agent-1",
+		"hostname":"agent-1",
+		"actor":"local-agent",
+		"tool_name":"asset_inventory",
+		"command":"read protected vault",
+		"labels":["canary","deception"]
+	}`))
+	rec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var decision struct {
+		Action struct {
+			ID string `json:"id"`
+		} `json:"action"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &decision); err != nil {
+		t.Fatalf("decode gateway decision: %v", err)
+	}
+	if decision.Action.ID == "" {
+		t.Fatal("expected blocked action")
+	}
+
+	approveReq := httptest.NewRequest(http.MethodPost, "/api/responses/approve", strings.NewReader(`{"action_id":"`+decision.Action.ID+`","approved_by":"alice"}`))
+	approveRec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(approveRec, approveReq)
+	if approveRec.Code != http.StatusConflict {
+		t.Fatalf("expected 409 for blocked gateway action, got %d: %s", approveRec.Code, approveRec.Body.String())
 	}
 }
 

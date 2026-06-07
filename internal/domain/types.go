@@ -87,6 +87,7 @@ type ToolCallDecision struct {
 	Reason             string            `json:"reason"`
 	Risk               Severity          `json:"risk"`
 	CreatedAt          time.Time         `json:"created_at"`
+	Action             *ResponseAction   `json:"action,omitempty"`
 	Alerts             []Alert           `json:"alerts,omitempty"`
 	RecommendedActions []ResponseAction  `json:"recommended_actions,omitempty"`
 	Metadata           map[string]string `json:"metadata,omitempty"`

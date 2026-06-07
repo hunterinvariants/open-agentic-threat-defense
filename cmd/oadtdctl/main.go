@@ -54,6 +54,10 @@ func main() {
 		if err := tokenHash(os.Args[2:]); err != nil {
 			log.Fatal(err)
 		}
+	case "wedge-demo":
+		if err := wedgeDemo(os.Args[2:]); err != nil {
+			log.Fatal(err)
+		}
 	default:
 		usage()
 		os.Exit(2)
@@ -277,6 +281,85 @@ func agentCommand(args []string) error {
 	return nil
 }
 
+func wedgeDemo(args []string) error {
+	fs := flag.NewFlagSet("wedge-demo", flag.ContinueOnError)
+	baseURL := fs.String("url", "http://localhost:8080", "OADTD base URL")
+	token := fs.String("token", os.Getenv("OATD_API_TOKEN"), "optional API token")
+	approvedBy := fs.String("approved-by", "operator", "approver for held requests")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	cases := []struct {
+		name string
+		req  domain.ToolCallRequest
+	}{
+		{
+			name: "benign",
+			req: domain.ToolCallRequest{
+				AssetID:  "demo-agent-01",
+				Hostname: "demo-agent-01",
+				Actor:    "demo-agent",
+				ToolName: "asset_inventory",
+				Command:  "list assets",
+				Labels:   []string{"agent", "tool-call"},
+			},
+		},
+		{
+			name: "risky",
+			req: domain.ToolCallRequest{
+				AssetID:   "demo-agent-01",
+				Hostname:  "demo-agent-01",
+				Actor:     "demo-agent",
+				ToolName:  "asset_inventory",
+				Command:   "inspect inventory",
+				Arguments: "token=abc123",
+				Labels:    []string{"agent", "tool-call"},
+			},
+		},
+		{
+			name: "canary",
+			req: domain.ToolCallRequest{
+				AssetID:  "demo-agent-01",
+				Hostname: "demo-agent-01",
+				Actor:    "demo-agent",
+				ToolName: "asset_inventory",
+				Command:  "read protected vault",
+				Signal:   "canary token touched",
+				Labels:   []string{"agent", "tool-call", "canary", "deception"},
+			},
+		},
+	}
+
+	fmt.Println("wedge-demo:")
+	for _, tc := range cases {
+		decision, err := postGatewayDecision(client, *baseURL, *token, tc.req)
+		if err != nil {
+			return fmt.Errorf("%s: %w", tc.name, err)
+		}
+		switch decision.Verdict {
+		case "allow":
+			fmt.Printf("- %s: allow -> proceed\n", tc.name)
+		case "deny":
+			fmt.Printf("- %s: deny -> alerts=%d evidence=%s\n", tc.name, len(decision.Alerts), decision.Reason)
+		case "require_approval":
+			if decision.Action == nil {
+				return fmt.Errorf("%s: approval verdict without action", tc.name)
+			}
+			fmt.Printf("- %s: require approval -> pending action %s\n", tc.name, decision.Action.ID)
+			approved, err := approveGatewayAction(client, *baseURL, *token, decision.Action.ID, *approvedBy)
+			if err != nil {
+				return fmt.Errorf("%s approve: %w", tc.name, err)
+			}
+			fmt.Printf("  approved by %s -> execution=%s\n", *approvedBy, approved.ExecutionStatus)
+		default:
+			return fmt.Errorf("%s: unexpected verdict %s", tc.name, decision.Verdict)
+		}
+	}
+	return nil
+}
+
 func readEvents(filePath string) ([]domain.Event, error) {
 	input, closeInput, err := openInput(filePath)
 	if err != nil {
@@ -306,6 +389,75 @@ func openOutput(filePath string) (io.Writer, func(), error) {
 		return nil, nil, err
 	}
 	return file, func() { _ = file.Close() }, nil
+}
+
+func postGatewayDecision(client *http.Client, baseURL string, token string, request domain.ToolCallRequest) (domain.ToolCallDecision, error) {
+	body, err := json.Marshal(request)
+	if err != nil {
+		return domain.ToolCallDecision{}, err
+	}
+	endpoint := strings.TrimRight(baseURL, "/") + "/api/gateway/decide"
+	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return domain.ToolCallDecision{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return domain.ToolCallDecision{}, err
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return domain.ToolCallDecision{}, fmt.Errorf("POST %s returned %s: %s", endpoint, resp.Status, strings.TrimSpace(string(respBody)))
+	}
+
+	var decision domain.ToolCallDecision
+	if err := json.Unmarshal(respBody, &decision); err != nil {
+		return domain.ToolCallDecision{}, err
+	}
+	return decision, nil
+}
+
+func approveGatewayAction(client *http.Client, baseURL string, token string, actionID string, approvedBy string) (domain.ResponseAction, error) {
+	body, err := json.Marshal(map[string]string{
+		"action_id":   actionID,
+		"approved_by": approvedBy,
+	})
+	if err != nil {
+		return domain.ResponseAction{}, err
+	}
+	endpoint := strings.TrimRight(baseURL, "/") + "/api/responses/approve"
+	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return domain.ResponseAction{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return domain.ResponseAction{}, err
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return domain.ResponseAction{}, fmt.Errorf("POST %s returned %s: %s", endpoint, resp.Status, strings.TrimSpace(string(respBody)))
+	}
+
+	var action domain.ResponseAction
+	if err := json.Unmarshal(respBody, &action); err != nil {
+		return domain.ResponseAction{}, err
+	}
+	return action, nil
 }
 
 func postEvents(client *http.Client, baseURL string, token string, events []domain.Event) (int, error) {
@@ -353,6 +505,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  oadtdctl agent --source windows-eventlog [--log-name Microsoft-Windows-Sysmon/Operational]")
 	fmt.Fprintln(os.Stderr, "  oadtdctl agent --source journald [--journal-unit ssh.service]")
 	fmt.Fprintln(os.Stderr, "  oadtdctl token-hash --token TOKEN")
+	fmt.Fprintln(os.Stderr, "  oadtdctl wedge-demo [--url http://localhost:8080] [--approved-by operator]")
 }
 
 func isNativeAgentSource(source string) bool {

@@ -83,6 +83,11 @@ planner as the rest of the service. It adds evidence at the decision point
 instead of only after telemetry arrives. That gives the product a control-point
 shape that is distinct from a pure SOC/XDR telemetry platform.
 
+Require-approval and deny outcomes create a persisted gateway action record so
+the decision path is visible in the same approval queue and audit trail as the
+rest of the response workflow. The `oadtdctl wedge-demo` command exercises the
+full sequence end to end.
+
 ### Correlator
 
 `internal/correlator` joins events over a time window and raises higher

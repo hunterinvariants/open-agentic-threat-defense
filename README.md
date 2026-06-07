@@ -271,6 +271,12 @@ Validate a file without sending it:
 go run ./cmd/oadtdctl replay --file examples\demo-events.jsonl --dry-run
 ```
 
+Run the wedge demo against a live server:
+
+```powershell
+go run ./cmd/oadtdctl wedge-demo --url http://localhost:8080 --approved-by operator
+```
+
 Normalize external defensive logs to OATD JSONL:
 
 ```powershell

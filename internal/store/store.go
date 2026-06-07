@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"sort"
 	"sync"
 	"time"
@@ -158,6 +159,9 @@ func (s *Store) ApproveAction(id string, approvedBy string, approvedAt time.Time
 	for i := range s.actions {
 		if s.actions[i].ID != id {
 			continue
+		}
+		if s.actions[i].Type == "gateway_tool_call" && s.actions[i].ExecutionStatus == "blocked" {
+			return domain.ResponseAction{}, true, errors.New("blocked gateway actions cannot be approved")
 		}
 		s.actions[i].ApprovalStatus = "approved"
 		s.actions[i].ApprovedBy = approvedBy
