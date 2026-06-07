@@ -142,6 +142,8 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("/api/session", a.handleSession)
 	mux.HandleFunc("/api/gateway/decide", a.handleGatewayDecision)
 	mux.HandleFunc("/api/gateway/execute", a.handleGatewayExecute)
+	mux.HandleFunc("/api/gateway/queue", a.handleGatewayQueue)
+	mux.HandleFunc("/api/gateway/actions/", a.handleGatewayAction)
 	mux.HandleFunc("/api/events", a.handleEvents)
 	mux.HandleFunc("/api/alerts", a.handleAlerts)
 	mux.HandleFunc("/api/assets", a.handleAssets)
@@ -507,6 +509,35 @@ func (a *App) handleGatewayExecute(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, http.StatusInternalServerError, errors.New("unknown gateway verdict"))
 	}
+}
+
+func (a *App) handleGatewayQueue(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"pending_actions": a.store.ListPendingGatewayActions(),
+	})
+}
+
+func (a *App) handleGatewayAction(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/api/gateway/actions/")
+	id = strings.Trim(id, "/")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, errors.New("action id is required"))
+		return
+	}
+	action, ok := a.store.GetAction(id)
+	if !ok {
+		writeError(w, http.StatusNotFound, errors.New("action not found"))
+		return
+	}
+	writeJSON(w, http.StatusOK, action)
 }
 
 func (a *App) handleAlerts(w http.ResponseWriter, r *http.Request) {

@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -286,6 +287,9 @@ func wedgeDemo(args []string) error {
 	baseURL := fs.String("url", "http://localhost:8080", "OADTD base URL")
 	token := fs.String("token", os.Getenv("OATD_API_TOKEN"), "optional API token")
 	approvedBy := fs.String("approved-by", "operator", "approver for held requests")
+	awaitApproval := fs.Bool("await-approval", false, "wait for operator approval instead of auto-approving the pending action")
+	approvalTimeout := fs.Duration("approval-timeout", 30*time.Second, "how long to wait for operator approval when awaiting")
+	pollInterval := fs.Duration("poll-interval", 2*time.Second, "poll interval while waiting for operator approval")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -350,11 +354,19 @@ func wedgeDemo(args []string) error {
 				return fmt.Errorf("%s: approval verdict without action", tc.name)
 			}
 			fmt.Printf("- %s: require approval -> pending action %s\n", tc.name, result.Action.ID)
-			approved, err := approveGatewayAction(client, *baseURL, *token, result.Action.ID, *approvedBy)
-			if err != nil {
-				return fmt.Errorf("%s approve: %w", tc.name, err)
+			if *awaitApproval {
+				updated, err := waitForGatewayActionExecution(client, *baseURL, *token, result.Action.ID, *approvalTimeout, *pollInterval)
+				if err != nil {
+					return fmt.Errorf("%s wait: %w", tc.name, err)
+				}
+				fmt.Printf("  operator approved -> execution=%s\n", updated.ExecutionStatus)
+			} else {
+				approved, err := approveGatewayAction(client, *baseURL, *token, result.Action.ID, *approvedBy)
+				if err != nil {
+					return fmt.Errorf("%s approve: %w", tc.name, err)
+				}
+				fmt.Printf("  approved by %s -> execution=%s\n", *approvedBy, approved.ExecutionStatus)
 			}
-			fmt.Printf("  approved by %s -> execution=%s\n", *approvedBy, approved.ExecutionStatus)
 		default:
 			return fmt.Errorf("%s: unexpected status %s", tc.name, result.Status)
 		}
@@ -433,6 +445,51 @@ func postGatewayExecution(client *http.Client, baseURL string, token string, req
 		}
 	}
 	return result, nil
+}
+
+func getGatewayAction(client *http.Client, baseURL string, token string, actionID string) (domain.ResponseAction, error) {
+	endpoint := strings.TrimRight(baseURL, "/") + "/api/gateway/actions/" + url.PathEscape(actionID)
+	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return domain.ResponseAction{}, err
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return domain.ResponseAction{}, err
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return domain.ResponseAction{}, fmt.Errorf("GET %s returned %s: %s", endpoint, resp.Status, strings.TrimSpace(string(respBody)))
+	}
+	var action domain.ResponseAction
+	if err := json.Unmarshal(respBody, &action); err != nil {
+		return domain.ResponseAction{}, err
+	}
+	return action, nil
+}
+
+func waitForGatewayActionExecution(client *http.Client, baseURL string, token string, actionID string, timeout time.Duration, interval time.Duration) (domain.ResponseAction, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		action, err := getGatewayAction(client, baseURL, token, actionID)
+		if err != nil {
+			return domain.ResponseAction{}, err
+		}
+		if action.ExecutionStatus != "" && action.ExecutionStatus != "not_required" {
+			return action, nil
+		}
+		if action.ApprovalStatus == "approved" {
+			return action, nil
+		}
+		if time.Now().After(deadline) {
+			return domain.ResponseAction{}, fmt.Errorf("timed out waiting for approval of %s", actionID)
+		}
+		time.Sleep(interval)
+	}
 }
 
 func approveGatewayAction(client *http.Client, baseURL string, token string, actionID string, approvedBy string) (domain.ResponseAction, error) {
@@ -516,7 +573,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  oadtdctl agent --source windows-eventlog [--log-name Microsoft-Windows-Sysmon/Operational]")
 	fmt.Fprintln(os.Stderr, "  oadtdctl agent --source journald [--journal-unit ssh.service]")
 	fmt.Fprintln(os.Stderr, "  oadtdctl token-hash --token TOKEN")
-	fmt.Fprintln(os.Stderr, "  oadtdctl wedge-demo [--url http://localhost:8080] [--approved-by operator]")
+	fmt.Fprintln(os.Stderr, "  oadtdctl wedge-demo [--url http://localhost:8080] [--approved-by operator] [--await-approval]")
 }
 
 func isNativeAgentSource(source string) bool {

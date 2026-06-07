@@ -91,7 +91,9 @@ paths rather than only as keyword hits.
 Require-approval and deny outcomes create a persisted gateway action record so
 the decision path is visible in the same approval queue and audit trail as the
 rest of the response workflow. The `oadtdctl wedge-demo` command exercises the
-full sequence end to end.
+full sequence end to end. `GET /api/gateway/queue` lists pending gateway
+actions and `GET /api/gateway/actions/{id}` exposes the live approval state for
+polling or console workflows.
 
 ### Correlator
 

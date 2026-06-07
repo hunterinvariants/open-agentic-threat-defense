@@ -492,6 +492,93 @@ func TestGatewayExecuteEndpointBlocksCanary(t *testing.T) {
 	}
 }
 
+func TestGatewayQueueListsPendingActions(t *testing.T) {
+	app, err := NewWithOptions(Options{})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/execute", strings.NewReader(`{
+		"asset_id":"agent-1",
+		"hostname":"agent-1",
+		"actor":"local-agent",
+		"tool_name":"asset_inventory",
+		"command":"inspect inventory",
+		"arguments":"token=abc123"
+	}`))
+	rec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	queueReq := httptest.NewRequest(http.MethodGet, "/api/gateway/queue", nil)
+	queueRec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(queueRec, queueReq)
+	if queueRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", queueRec.Code, queueRec.Body.String())
+	}
+	var payload struct {
+		PendingActions []struct {
+			ID              string `json:"id"`
+			ApprovalStatus  string `json:"approval_status"`
+			ExecutionStatus string `json:"execution_status"`
+		} `json:"pending_actions"`
+	}
+	if err := json.Unmarshal(queueRec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode queue: %v", err)
+	}
+	if len(payload.PendingActions) != 1 || payload.PendingActions[0].ApprovalStatus != "required" || payload.PendingActions[0].ExecutionStatus != "" {
+		t.Fatalf("unexpected queue payload: %#v", payload)
+	}
+}
+
+func TestGatewayActionLookupReturnsAction(t *testing.T) {
+	app, err := NewWithOptions(Options{})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/execute", strings.NewReader(`{
+		"asset_id":"agent-1",
+		"hostname":"agent-1",
+		"actor":"local-agent",
+		"tool_name":"asset_inventory",
+		"command":"inspect inventory",
+		"arguments":"token=abc123"
+	}`))
+	rec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var result struct {
+		Action struct {
+			ID string `json:"id"`
+		} `json:"action"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode execute response: %v", err)
+	}
+
+	actionReq := httptest.NewRequest(http.MethodGet, "/api/gateway/actions/"+result.Action.ID, nil)
+	actionRec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(actionRec, actionReq)
+	if actionRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", actionRec.Code, actionRec.Body.String())
+	}
+	var action struct {
+		ID             string `json:"id"`
+		ApprovalStatus string `json:"approval_status"`
+	}
+	if err := json.Unmarshal(actionRec.Body.Bytes(), &action); err != nil {
+		t.Fatalf("decode action: %v", err)
+	}
+	if action.ID != result.Action.ID || action.ApprovalStatus != "required" {
+		t.Fatalf("unexpected action lookup: %#v", action)
+	}
+}
+
 func TestSessionLoginAndLogout(t *testing.T) {
 	app, err := NewWithOptions(Options{
 		Users: []auth.UserConfig{{Name: "alice", TokenHash: auth.HashToken("secret"), Roles: []string{auth.RoleOperator}}},

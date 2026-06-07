@@ -152,6 +152,34 @@ func (s *Store) AddActions(actions []domain.ResponseAction) error {
 	return s.persistLocked()
 }
 
+func (s *Store) GetAction(id string) (domain.ResponseAction, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for _, action := range s.actions {
+		if action.ID == id {
+			return action, true
+		}
+	}
+	return domain.ResponseAction{}, false
+}
+
+func (s *Store) ListPendingGatewayActions() []domain.ResponseAction {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	actions := make([]domain.ResponseAction, 0)
+	for _, action := range s.actions {
+		if action.Type == "gateway_tool_call" && action.ApprovalStatus == "required" {
+			actions = append(actions, action)
+		}
+	}
+	sort.Slice(actions, func(i, j int) bool {
+		return actions[i].CreatedAt.After(actions[j].CreatedAt)
+	})
+	return actions
+}
+
 func (s *Store) ApproveAction(id string, approvedBy string, approvedAt time.Time) (domain.ResponseAction, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
