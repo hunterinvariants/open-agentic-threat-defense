@@ -247,6 +247,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("/api/gateway/execute", a.handleGatewayExecute)
 	mux.HandleFunc("/api/policy/reload", a.handlePolicyReload)
 	mux.HandleFunc("/api/deception/tokens", a.handleDeceptionTokens)
+	mux.HandleFunc("/api/timeline", a.handleTimeline)
 	mux.HandleFunc("/api/gateway/queue", a.handleGatewayQueue)
 	mux.HandleFunc("/api/gateway/actions/", a.handleGatewayAction)
 	mux.HandleFunc("/api/events", a.handleEvents)
@@ -1239,6 +1240,86 @@ func (a *App) handleDeceptionTokens(w http.ResponseWriter, r *http.Request) {
 	default:
 		methodNotAllowed(w)
 	}
+}
+
+type timelineEntry struct {
+	Timestamp time.Time `json:"timestamp"`
+	Kind      string    `json:"kind"` // event | alert | action | audit
+	ID        string    `json:"id"`
+	Title     string    `json:"title"`
+	Detail    string    `json:"detail,omitempty"`
+	Severity  string    `json:"severity,omitempty"`
+}
+
+func (a *App) handleTimeline(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	asset := strings.TrimSpace(r.URL.Query().Get("asset_id"))
+	if asset == "" {
+		writeError(w, http.StatusBadRequest, errors.New("asset_id query parameter is required"))
+		return
+	}
+	tenant := tenantForPrincipal(principalFromRequest(r))
+	writeJSON(w, http.StatusOK, map[string]any{
+		"asset_id": asset,
+		"entries":  a.buildTimeline(tenant, asset),
+	})
+}
+
+// buildTimeline merges events, alerts, response actions, and audit records for a
+// single asset into one chronological investigation view (tenant-scoped).
+func (a *App) buildTimeline(tenant string, asset string) []timelineEntry {
+	entries := []timelineEntry{}
+	for _, e := range a.listEventsForTenant(tenant) {
+		if e.AssetID != asset {
+			continue
+		}
+		entries = append(entries, timelineEntry{
+			Timestamp: e.Timestamp, Kind: "event", ID: e.ID,
+			Title:  string(e.Kind),
+			Detail: firstNonEmptyTimeline(e.Signal, e.Command, e.ToolName, e.Process, e.Destination),
+		})
+	}
+	for _, al := range a.listAlertsForTenant(tenant) {
+		if al.AssetID != asset {
+			continue
+		}
+		entries = append(entries, timelineEntry{
+			Timestamp: al.CreatedAt, Kind: "alert", ID: al.ID,
+			Title: al.Title, Detail: al.RuleID, Severity: string(al.Severity),
+		})
+	}
+	for _, ac := range a.listActionsForTenant(tenant) {
+		if ac.AssetID != asset {
+			continue
+		}
+		entries = append(entries, timelineEntry{
+			Timestamp: ac.CreatedAt, Kind: "action", ID: ac.ID,
+			Title: ac.Type, Detail: ac.Reason,
+		})
+	}
+	for _, au := range a.listAuditsForTenant(tenant) {
+		if strings.TrimSpace(au.Metadata["asset_id"]) != asset {
+			continue
+		}
+		entries = append(entries, timelineEntry{
+			Timestamp: au.Timestamp, Kind: "audit", ID: au.ID,
+			Title: au.Action, Detail: au.Outcome,
+		})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Timestamp.Before(entries[j].Timestamp) })
+	return entries
+}
+
+func firstNonEmptyTimeline(values ...string) string {
+	for _, value := range values {
+		if s := strings.TrimSpace(value); s != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 func (a *App) handleResponseApproval(w http.ResponseWriter, r *http.Request) {
