@@ -1222,3 +1222,79 @@ func TestPhysicalTenantIsolationUsesSeparateStores(t *testing.T) {
 		t.Fatalf("expected tenant_count >= 2, got %#v", got)
 	}
 }
+
+func TestTenantAdminCRUDPersistsMetadata(t *testing.T) {
+	dir := t.TempDir()
+	app, err := NewWithOptions(Options{
+		DataPath:               filepath.Join(dir, "default.json"),
+		TenantIsolationMode:    "physical",
+		TenantRegistryPath:     filepath.Join(dir, "tenants.json"),
+		TenantDataPathTemplate: filepath.Join(dir, "{tenant}.json"),
+		Users: []auth.UserConfig{
+			{Name: "admin", Tenant: "default", TokenHash: auth.HashToken("admin-secret"), Roles: []string{auth.RoleAdmin}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+
+	createReq := httptest.NewRequest(http.MethodPost, "/api/tenants", strings.NewReader(`{
+		"tenant":"tenant-z",
+		"mode":"file",
+		"admins":["alice","bob"],
+		"policy_profile":"strict",
+		"retention_window":"30d",
+		"sso_profile":"oidc",
+		"backup_target":"s3://archive/oatd",
+		"labels":["prod","finance"],
+		"notes":"mission critical"
+	}`))
+	createReq.Header.Set("Authorization", "Bearer admin-secret")
+	createRec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("expected create 201, got %d: %s", createRec.Code, createRec.Body.String())
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/tenants/tenant-z", nil)
+	getReq.Header.Set("Authorization", "Bearer admin-secret")
+	getRec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("expected tenant get 200, got %d: %s", getRec.Code, getRec.Body.String())
+	}
+	if !strings.Contains(getRec.Body.String(), `"policy_profile":"strict"`) || !strings.Contains(getRec.Body.String(), `"admins":["alice","bob"]`) {
+		t.Fatalf("expected tenant metadata in response, got %s", getRec.Body.String())
+	}
+
+	updateReq := httptest.NewRequest(http.MethodPut, "/api/tenants/tenant-z", strings.NewReader(`{
+		"retention_window":"720h",
+		"backup_target":"s3://archive/oatd/nightly",
+		"notes":"updated"
+	}`))
+	updateReq.Header.Set("Authorization", "Bearer admin-secret")
+	updateRec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(updateRec, updateReq)
+	if updateRec.Code != http.StatusOK {
+		t.Fatalf("expected tenant update 200, got %d: %s", updateRec.Code, updateRec.Body.String())
+	}
+	if !strings.Contains(updateRec.Body.String(), `"retention_window":"720h"`) {
+		t.Fatalf("expected updated retention in response, got %s", updateRec.Body.String())
+	}
+
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/tenants/tenant-z", nil)
+	deleteReq.Header.Set("Authorization", "Bearer admin-secret")
+	deleteRec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(deleteRec, deleteReq)
+	if deleteRec.Code != http.StatusOK {
+		t.Fatalf("expected tenant delete 200, got %d: %s", deleteRec.Code, deleteRec.Body.String())
+	}
+
+	missingReq := httptest.NewRequest(http.MethodGet, "/api/tenants/tenant-z", nil)
+	missingReq.Header.Set("Authorization", "Bearer admin-secret")
+	missingRec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(missingRec, missingReq)
+	if missingRec.Code != http.StatusNotFound {
+		t.Fatalf("expected deleted tenant to disappear, got %d: %s", missingRec.Code, missingRec.Body.String())
+	}
+}

@@ -152,7 +152,38 @@
                   <span>Data path</span>
                   <input id="tenant-data-path" type="text" spellcheck="false" placeholder="/var/lib/oatd/{tenant}.json">
                 </label>
-                <button id="tenant-submit" class="secondary" type="submit">Provision tenant</button>
+                <label class="field">
+                  <span>Admins</span>
+                  <input id="tenant-admins" type="text" spellcheck="false" placeholder="alice,bob">
+                </label>
+                <label class="field">
+                  <span>Policy profile</span>
+                  <input id="tenant-policy-profile" type="text" spellcheck="false" placeholder="strict">
+                </label>
+                <label class="field">
+                  <span>Retention window</span>
+                  <input id="tenant-retention-window" type="text" spellcheck="false" placeholder="30d">
+                </label>
+                <label class="field">
+                  <span>SSO profile</span>
+                  <input id="tenant-sso-profile" type="text" spellcheck="false" placeholder="oidc">
+                </label>
+                <label class="field">
+                  <span>Backup target</span>
+                  <input id="tenant-backup-target" type="text" spellcheck="false" placeholder="s3://...">
+                </label>
+                <label class="field">
+                  <span>Labels</span>
+                  <input id="tenant-labels" type="text" spellcheck="false" placeholder="prod,finance">
+                </label>
+                <label class="field">
+                  <span>Notes</span>
+                  <input id="tenant-notes" type="text" spellcheck="false" placeholder="tenant notes">
+                </label>
+                <div class="action-row">
+                  <button id="tenant-submit" class="secondary" type="submit">Provision tenant</button>
+                  <button id="tenant-cancel" class="secondary" type="button">Cancel edit</button>
+                </div>
                 <p id="tenant-error" class="form-error" role="status" aria-live="polite"></p>
               </form>
               <div id="tenants-list" class="rules-list"></div>

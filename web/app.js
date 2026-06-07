@@ -1,4 +1,4 @@
-const els = {
+﻿const els = {
   loginView: document.querySelector("#login-view"),
   appView: document.querySelector("#app-view"),
   loginForm: document.querySelector("#login-form"),
@@ -13,7 +13,15 @@ const els = {
   tenantMode: document.querySelector("#tenant-mode"),
   tenantPostgresDSN: document.querySelector("#tenant-postgres-dsn"),
   tenantDataPath: document.querySelector("#tenant-data-path"),
+  tenantAdmins: document.querySelector("#tenant-admins"),
+  tenantPolicyProfile: document.querySelector("#tenant-policy-profile"),
+  tenantRetentionWindow: document.querySelector("#tenant-retention-window"),
+  tenantSSOProfile: document.querySelector("#tenant-sso-profile"),
+  tenantBackupTarget: document.querySelector("#tenant-backup-target"),
+  tenantLabels: document.querySelector("#tenant-labels"),
+  tenantNotes: document.querySelector("#tenant-notes"),
   tenantSubmit: document.querySelector("#tenant-submit"),
+  tenantCancel: document.querySelector("#tenant-cancel"),
   tenantError: document.querySelector("#tenant-error"),
   tenantsList: document.querySelector("#tenants-list"),
   sessionLabel: document.querySelector("#session-label"),
@@ -39,7 +47,8 @@ const els = {
 const emptyTemplate = document.querySelector("#empty-template");
 const state = {
   session: null,
-  pollHandle: null
+  pollHandle: null,
+  tenantEditTarget: null
 };
 
 async function api(path, options = {}) {
@@ -318,10 +327,113 @@ function renderTenants(tenants) {
         <span class="badge severity-${tenant.active ? "low" : "medium"}">${escapeHtml(tenant.mode || "")}</span>
       </div>
       <div class="item-meta">${escapeHtml(tenant.postgres_dsn || tenant.data_path || "-")}</div>
+      <div class="kv">
+        ${(tenant.admins || []).map((value) => `<span class="chip">admin: ${escapeHtml(value)}</span>`).join("")}
+        ${(tenant.labels || []).map((value) => `<span class="chip">label: ${escapeHtml(value)}</span>`).join("")}
+      </div>
       <p class="item-body">schema ${escapeHtml(String(tenant.schema_version || 0))} · ${escapeHtml(tenant.active ? "active" : "inactive")}</p>
+      <div class="item-body">
+        ${tenant.policy_profile ? `<div>policy ${escapeHtml(tenant.policy_profile)}</div>` : ""}
+        ${tenant.retention_window ? `<div>retention ${escapeHtml(tenant.retention_window)}</div>` : ""}
+        ${tenant.sso_profile ? `<div>sso ${escapeHtml(tenant.sso_profile)}</div>` : ""}
+        ${tenant.backup_target ? `<div>backup ${escapeHtml(tenant.backup_target)}</div>` : ""}
+        ${tenant.notes ? `<div>${escapeHtml(tenant.notes)}</div>` : ""}
+      </div>
+      <div class="action-row">
+        <button class="small" data-tenant-edit="${escapeHtml(tenant.tenant || "")}">Edit</button>
+        <button class="small" data-tenant-delete="${escapeHtml(tenant.tenant || "")}">Delete</button>
+      </div>
     `;
     els.tenantsList.append(node);
   });
+}
+
+function splitTenantValues(value) {
+  return String(value || "")
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function setTenantForm(tenant = null) {
+  state.tenantEditTarget = tenant ? tenant.tenant : null;
+  els.tenantForm.reset();
+  els.tenantMode.value = tenant && tenant.mode ? tenant.mode : "postgres";
+  els.tenantName.value = tenant && tenant.tenant ? tenant.tenant : "";
+  els.tenantPostgresDSN.value = tenant && tenant.postgres_dsn ? tenant.postgres_dsn : "";
+  els.tenantDataPath.value = tenant && tenant.data_path ? tenant.data_path : "";
+  els.tenantAdmins.value = tenant && Array.isArray(tenant.admins) ? tenant.admins.join(",") : "";
+  els.tenantPolicyProfile.value = tenant && tenant.policy_profile ? tenant.policy_profile : "";
+  els.tenantRetentionWindow.value = tenant && tenant.retention_window ? tenant.retention_window : "";
+  els.tenantSSOProfile.value = tenant && tenant.sso_profile ? tenant.sso_profile : "";
+  els.tenantBackupTarget.value = tenant && tenant.backup_target ? tenant.backup_target : "";
+  els.tenantLabels.value = tenant && Array.isArray(tenant.labels) ? tenant.labels.join(",") : "";
+  els.tenantNotes.value = tenant && tenant.notes ? tenant.notes : "";
+  els.tenantSubmit.textContent = state.tenantEditTarget ? "Save tenant" : "Provision tenant";
+}
+
+function clearTenantForm() {
+  setTenantForm(null);
+}
+
+function tenantPayloadFromForm() {
+  return {
+    tenant: els.tenantName.value,
+    mode: els.tenantMode.value,
+    postgres_dsn: els.tenantPostgresDSN.value,
+    data_path: els.tenantDataPath.value,
+    admins: splitTenantValues(els.tenantAdmins.value),
+    policy_profile: els.tenantPolicyProfile.value,
+    retention_window: els.tenantRetentionWindow.value,
+    sso_profile: els.tenantSSOProfile.value,
+    backup_target: els.tenantBackupTarget.value,
+    labels: splitTenantValues(els.tenantLabels.value),
+    notes: els.tenantNotes.value
+  };
+}
+
+function splitTenantValues(value) {
+  return String(value || "")
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function setTenantForm(tenant = null) {
+  state.tenantEditTarget = tenant ? tenant.tenant : null;
+  els.tenantForm.reset();
+  els.tenantMode.value = tenant && tenant.mode ? tenant.mode : "postgres";
+  els.tenantName.value = tenant && tenant.tenant ? tenant.tenant : "";
+  els.tenantPostgresDSN.value = tenant && tenant.postgres_dsn ? tenant.postgres_dsn : "";
+  els.tenantDataPath.value = tenant && tenant.data_path ? tenant.data_path : "";
+  els.tenantAdmins.value = tenant && Array.isArray(tenant.admins) ? tenant.admins.join(",") : "";
+  els.tenantPolicyProfile.value = tenant && tenant.policy_profile ? tenant.policy_profile : "";
+  els.tenantRetentionWindow.value = tenant && tenant.retention_window ? tenant.retention_window : "";
+  els.tenantSSOProfile.value = tenant && tenant.sso_profile ? tenant.sso_profile : "";
+  els.tenantBackupTarget.value = tenant && tenant.backup_target ? tenant.backup_target : "";
+  els.tenantLabels.value = tenant && Array.isArray(tenant.labels) ? tenant.labels.join(",") : "";
+  els.tenantNotes.value = tenant && tenant.notes ? tenant.notes : "";
+  els.tenantSubmit.textContent = state.tenantEditTarget ? "Save tenant" : "Provision tenant";
+}
+
+function clearTenantForm() {
+  setTenantForm(null);
+}
+
+function tenantPayloadFromForm() {
+  return {
+    tenant: els.tenantName.value,
+    mode: els.tenantMode.value,
+    postgres_dsn: els.tenantPostgresDSN.value,
+    data_path: els.tenantDataPath.value,
+    admins: splitTenantValues(els.tenantAdmins.value),
+    policy_profile: els.tenantPolicyProfile.value,
+    retention_window: els.tenantRetentionWindow.value,
+    sso_profile: els.tenantSSOProfile.value,
+    backup_target: els.tenantBackupTarget.value,
+    labels: splitTenantValues(els.tenantLabels.value),
+    notes: els.tenantNotes.value
+  };
 }
 
 function renderGraph(assets, alerts) {
@@ -423,10 +535,17 @@ async function logout() {
   showLogin("", state.session && state.session.sso ? state.session.sso : { oidc: false, saml: false });
 }
 
-async function provisionTenant(payload) {
-  return api("/api/tenants", {
-    method: "POST",
+async function saveTenant(payload, tenant = "") {
+  const path = tenant ? `/api/tenants/${encodeURIComponent(tenant)}` : "/api/tenants";
+  return api(path, {
+    method: tenant ? "PUT" : "POST",
     body: JSON.stringify(payload)
+  });
+}
+
+async function deleteTenant(tenant) {
+  return api(`/api/tenants/${encodeURIComponent(tenant)}`, {
+    method: "DELETE"
   });
 }
 
@@ -461,21 +580,19 @@ els.tenantForm.addEventListener("submit", async (event) => {
   els.tenantSubmit.disabled = true;
   els.tenantError.textContent = "";
   try {
-    await provisionTenant({
-      tenant: els.tenantName.value,
-      mode: els.tenantMode.value,
-      postgres_dsn: els.tenantPostgresDSN.value,
-      data_path: els.tenantDataPath.value
-    });
-    els.tenantForm.reset();
-    els.tenantMode.value = "postgres";
+    await saveTenant(tenantPayloadFromForm(), state.tenantEditTarget || "");
+    clearTenantForm();
     await refresh();
   } catch (error) {
     console.error(error);
-    els.tenantError.textContent = error && error.message ? error.message : "Tenant provisioning failed.";
+    els.tenantError.textContent = error && error.message ? error.message : "Tenant save failed.";
   } finally {
     els.tenantSubmit.disabled = false;
   }
+});
+
+els.tenantCancel.addEventListener("click", () => {
+  clearTenantForm();
 });
 
 els.logout.addEventListener("click", () => {
@@ -529,6 +646,38 @@ els.actionsList.addEventListener("click", async (event) => {
     handleApiFailure(error);
   } finally {
     button.disabled = false;
+  }
+});
+
+els.tenantsList.addEventListener("click", async (event) => {
+  const editButton = event.target.closest("[data-tenant-edit]");
+  if (editButton) {
+    const tenantName = editButton.dataset.tenantEdit;
+    const tenant = (await api("/api/tenants")).find((entry) => entry.tenant === tenantName);
+    if (tenant) {
+      setTenantForm(tenant);
+      els.tenantError.textContent = "";
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+    return;
+  }
+  const deleteButton = event.target.closest("[data-tenant-delete]");
+  if (!deleteButton) return;
+  const tenantName = deleteButton.dataset.tenantDelete;
+  if (!tenantName || !window.confirm(`Delete tenant ${tenantName}?`)) {
+    return;
+  }
+  deleteButton.disabled = true;
+  try {
+    await deleteTenant(tenantName);
+    if (state.tenantEditTarget === tenantName) {
+      clearTenantForm();
+    }
+    await refresh();
+  } catch (error) {
+    handleApiFailure(error);
+  } finally {
+    deleteButton.disabled = false;
   }
 });
 

@@ -31,7 +31,9 @@ first use, run with `--tenant-isolation-mode physical` and set one of:
 - `--tenant-data-path-template`
 
 The dashboard exposes a tenant admin panel through `GET /api/tenants` and
-`POST /api/tenants`.
+`POST /api/tenants`, plus per-tenant edit/delete through
+`GET /api/tenants/{tenant}`, `PUT /api/tenants/{tenant}`, and
+`DELETE /api/tenants/{tenant}`.
 
 ## Operational Rule
 

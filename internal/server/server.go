@@ -242,6 +242,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("/api/audit", a.handleAudit)
 	mux.HandleFunc("/api/audit/chain", a.handleAuditChain)
 	mux.HandleFunc("/api/tenants", a.handleTenants)
+	mux.HandleFunc("/api/tenants/", a.handleTenantBackend)
 	mux.HandleFunc("/api/responses/approve", a.handleResponseApproval)
 	mux.HandleFunc("/api/responses", a.handleResponses)
 	mux.HandleFunc("/api/policies", a.handlePolicies)
@@ -1037,21 +1038,86 @@ func (a *App) handleTenants(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, a.listTenantBackends())
 	case http.MethodPost:
 		var req struct {
-			Tenant      string `json:"tenant"`
-			Mode        string `json:"mode"`
-			PostgresDSN string `json:"postgres_dsn"`
-			DataPath    string `json:"data_path"`
+			Tenant          string   `json:"tenant"`
+			Mode            string   `json:"mode"`
+			PostgresDSN     string   `json:"postgres_dsn"`
+			DataPath        string   `json:"data_path"`
+			Admins          []string `json:"admins"`
+			PolicyProfile   string   `json:"policy_profile"`
+			RetentionWindow string   `json:"retention_window"`
+			SSOProfile      string   `json:"sso_profile"`
+			BackupTarget    string   `json:"backup_target"`
+			Labels          []string `json:"labels"`
+			Notes           string   `json:"notes"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		record, err := a.registerTenantBackend(req.Tenant, req.Mode, req.PostgresDSN, req.DataPath)
+		record, err := a.registerTenantBackend(req.Tenant, req.Mode, req.PostgresDSN, req.DataPath, req.Admins, req.PolicyProfile, req.RetentionWindow, req.SSOProfile, req.BackupTarget, req.Labels, req.Notes)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
 		writeJSON(w, http.StatusCreated, record)
+	default:
+		methodNotAllowed(w)
+	}
+}
+
+func (a *App) handleTenantBackend(w http.ResponseWriter, r *http.Request) {
+	principal := principalFromRequest(r)
+	if !principal.HasAny(auth.RoleAdmin) {
+		writeError(w, http.StatusForbidden, errors.New("admin role required"))
+		return
+	}
+	if a.tenantRegistry == nil {
+		writeError(w, http.StatusNotFound, errors.New("tenant registry is not configured"))
+		return
+	}
+	tenant := strings.TrimPrefix(r.URL.Path, "/api/tenants/")
+	tenant = strings.TrimSpace(tenant)
+	if tenant == "" || strings.Contains(tenant, "/") {
+		writeError(w, http.StatusNotFound, errors.New("tenant not found"))
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		if record, ok := a.tenantRegistry.get(tenant); ok {
+			writeJSON(w, http.StatusOK, tenantConfigToMap(tenant, record))
+			return
+		}
+		writeError(w, http.StatusNotFound, errors.New("tenant not found"))
+	case http.MethodPut:
+		var req struct {
+			Mode            string   `json:"mode"`
+			PostgresDSN     string   `json:"postgres_dsn"`
+			DataPath        string   `json:"data_path"`
+			Admins          []string `json:"admins"`
+			PolicyProfile   string   `json:"policy_profile"`
+			RetentionWindow string   `json:"retention_window"`
+			SSOProfile      string   `json:"sso_profile"`
+			BackupTarget    string   `json:"backup_target"`
+			Labels          []string `json:"labels"`
+			Notes           string   `json:"notes"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		record, err := a.updateTenantBackend(tenant, req.Mode, req.PostgresDSN, req.DataPath, req.Admins, req.PolicyProfile, req.RetentionWindow, req.SSOProfile, req.BackupTarget, req.Labels, req.Notes)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, record)
+	case http.MethodDelete:
+		record, err := a.deleteTenantBackend(tenant)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, record)
 	default:
 		methodNotAllowed(w)
 	}
@@ -1994,11 +2060,33 @@ func (a *App) tenantCount() int {
 	return a.tenantRegistry.count()
 }
 
-func (a *App) registerTenantBackend(tenant string, mode string, postgresDSN string, dataPath string) (map[string]any, error) {
+func (a *App) registerTenantBackend(tenant string, mode string, postgresDSN string, dataPath string, admins []string, policyProfile string, retentionWindow string, ssoProfile string, backupTarget string, labels []string, notes string) (map[string]any, error) {
 	if a.tenantRegistry == nil {
 		return nil, errors.New("tenant registry is not configured")
 	}
-	cfg, err := a.tenantRegistry.registerTenant(tenant, mode, postgresDSN, dataPath)
+	cfg, err := a.tenantRegistry.registerTenant(tenant, mode, postgresDSN, dataPath, admins, policyProfile, retentionWindow, ssoProfile, backupTarget, labels, notes)
+	if err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+func (a *App) updateTenantBackend(tenant string, mode string, postgresDSN string, dataPath string, admins []string, policyProfile string, retentionWindow string, ssoProfile string, backupTarget string, labels []string, notes string) (map[string]any, error) {
+	if a.tenantRegistry == nil {
+		return nil, errors.New("tenant registry is not configured")
+	}
+	cfg, err := a.tenantRegistry.updateTenant(tenant, mode, postgresDSN, dataPath, admins, policyProfile, retentionWindow, ssoProfile, backupTarget, labels, notes)
+	if err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+func (a *App) deleteTenantBackend(tenant string) (map[string]any, error) {
+	if a.tenantRegistry == nil {
+		return nil, errors.New("tenant registry is not configured")
+	}
+	cfg, err := a.tenantRegistry.deleteTenant(tenant)
 	if err != nil {
 		return nil, err
 	}

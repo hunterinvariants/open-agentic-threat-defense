@@ -45,3 +45,16 @@ Use `packaging/systemd/oadtd@.service` with one environment file per instance:
 
 Each file should point at the same Postgres cluster, but can use a distinct
 `OATD_PUBLIC_URL`, `OATD_ADDR`, and `OATD_INSTANCE_NAME`.
+
+## Operational Helpers
+
+- `scripts/ha-check.sh` validates readiness for all configured instances.
+- `scripts/ha-rollout.sh` restarts instances one by one and waits for
+  `/readyz` before moving to the next node.
+
+Example:
+
+```bash
+sudo OATD_HA_INSTANCES=blue,green scripts/ha-check.sh
+sudo OATD_HA_INSTANCES=blue,green scripts/ha-rollout.sh
+```
