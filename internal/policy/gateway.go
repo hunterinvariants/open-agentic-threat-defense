@@ -64,7 +64,18 @@ func (e *Engine) GateToolCall(request domain.ToolCallRequest) domain.ToolCallDec
 	}
 
 	taint := analyzeGatewayTaint(request, tool, command, signal)
-	verdict, reason, risk, findings := e.assessGatewayRequest(request, tool, command, signal, alerts, taint)
+	historyBefore := e.gatewayHistorySnapshot(request)
+	verdict, reason, risk, findings := e.assessGatewayRequest(request, tool, command, signal, alerts, taint, historyBefore)
+	riskScore, riskFactors := e.scoreGatewayRequest(request, tool, command, signal, alerts, taint, historyBefore, verdict, risk)
+	if verdict == domain.GatewayAllow && riskScore >= 70 {
+		verdict = domain.GatewayRequireApproval
+		reason = "risk score exceeded the inline allow threshold"
+	}
+	if verdict == domain.GatewayRequireApproval && riskScore >= 90 && taint.HasSourcePrefix("canary:") {
+		verdict = domain.GatewayDeny
+		reason = "critical taint path exceeded the deny threshold"
+	}
+	historyAfter := e.recordGatewayHistory(request, verdict, riskScore, append(findings, riskFactors...), tool)
 
 	metadata := cloneStringMap(request.Metadata)
 	if metadata == nil {
@@ -97,8 +108,13 @@ func (e *Engine) GateToolCall(request domain.ToolCallRequest) domain.ToolCallDec
 	if len(taint.Provenance) > 0 {
 		metadata["taint_provenance"] = strings.Join(taint.Provenance, ";")
 	}
+	metadata["risk_score"] = fmt.Sprintf("%d", riskScore)
+	metadata["history_context"] = historyAfter.contextString()
 	if len(findings) > 0 {
 		metadata["signals"] = strings.Join(findings, ";")
+	}
+	if len(riskFactors) > 0 {
+		metadata["risk_factors"] = strings.Join(riskFactors, ";")
 	}
 
 	return domain.ToolCallDecision{
@@ -114,7 +130,7 @@ func (e *Engine) GateToolCall(request domain.ToolCallRequest) domain.ToolCallDec
 	}
 }
 
-func (e *Engine) assessGatewayRequest(request domain.ToolCallRequest, tool string, command string, signal string, alerts []domain.Alert, taint TaintAnalysis) (domain.GatewayVerdict, string, domain.Severity, []string) {
+func (e *Engine) assessGatewayRequest(request domain.ToolCallRequest, tool string, command string, signal string, alerts []domain.Alert, taint TaintAnalysis, history gatewayHistorySnapshot) (domain.GatewayVerdict, string, domain.Severity, []string) {
 	payloadVariants := gatewayTextVariants(
 		command,
 		request.Signal,
@@ -176,6 +192,16 @@ func (e *Engine) assessGatewayRequest(request domain.ToolCallRequest, tool strin
 			verdict = domain.GatewayRequireApproval
 			reason = "source-to-sink flow requires operator approval"
 			risk = maxSeverity(risk, domain.SeverityHigh)
+		} else if match, term, variant := gatewayContainsAny(payloadVariants, injectionTerms()); match {
+			verdict = domain.GatewayRequireApproval
+			if variant != term {
+				reason = "obfuscated prompt-injection-like instruction requires approval"
+				findings = append(findings, fmt.Sprintf("injection_term=%s", term), fmt.Sprintf("variant=%s", variant))
+			} else {
+				reason = "prompt-injection-like instruction requires approval"
+				findings = append(findings, fmt.Sprintf("injection_term=%s", term))
+			}
+			risk = maxSeverity(risk, domain.SeverityHigh)
 		} else if match, term, variant := gatewayContainsAny(payloadVariants, secretTerms()); match {
 			verdict = domain.GatewayRequireApproval
 			if variant != term {
@@ -212,7 +238,82 @@ func (e *Engine) assessGatewayRequest(request domain.ToolCallRequest, tool strin
 	if len(findings) > 0 && verdict == domain.GatewayAllow {
 		verdict = domain.GatewayRequireApproval
 	}
+	if history.ApprovalCount > 0 && verdict == domain.GatewayAllow {
+		findings = append(findings, fmt.Sprintf("history_prior_approvals=%d", history.ApprovalCount))
+	}
 	return verdict, reason, risk, findings
+}
+
+func (e *Engine) scoreGatewayRequest(request domain.ToolCallRequest, tool string, command string, signal string, alerts []domain.Alert, taint TaintAnalysis, history gatewayHistorySnapshot, verdict domain.GatewayVerdict, risk domain.Severity) (int, []string) {
+	score := risk.Rank() * 10
+	factors := []string{fmt.Sprintf("risk=%s", risk), fmt.Sprintf("verdict=%s", verdict)}
+
+	if len(alerts) > 0 {
+		score += severityForAlerts(alerts).Rank() * 8
+		factors = append(factors, fmt.Sprintf("alerts=%d", len(alerts)))
+	}
+	if taint.HasSourcePrefix("secret:") {
+		score += 20
+		factors = append(factors, "taint:secret_source")
+	}
+	if taint.HasSourcePrefix("canary:") {
+		score += 35
+		factors = append(factors, "taint:canary_source")
+	}
+	if taint.HasSinkPrefix("external_destination:") {
+		score += 15
+		factors = append(factors, "taint:external_sink")
+	}
+	if taint.HasSignalPrefix("obfuscated_source:") || taint.HasSignalPrefix("obfuscated_sink:") {
+		score += 10
+		factors = append(factors, "taint:obfuscated")
+	}
+	if match, term, variant := gatewayContainsAny(gatewayTextVariants(command, signal, request.Destination, strings.Join(request.Labels, " "), metadataText(request.Metadata)), injectionTerms()); match {
+		score += 18
+		if variant != term {
+			factors = append(factors, "injection:obfuscated")
+		} else {
+			factors = append(factors, "injection:keyword")
+		}
+	}
+	if history.Calls > 0 {
+		score += minInt(history.Calls*2, 12)
+		factors = append(factors, fmt.Sprintf("history:calls=%d", history.Calls))
+	}
+	if history.ApprovalCount > 0 {
+		score += minInt(history.ApprovalCount*8, 24)
+		factors = append(factors, fmt.Sprintf("history:approvals=%d", history.ApprovalCount))
+	}
+	if history.DenyCount > 0 {
+		score += minInt(history.DenyCount*10, 30)
+		factors = append(factors, fmt.Sprintf("history:denies=%d", history.DenyCount))
+	}
+	if history.RiskScoreMax > 0 {
+		score += minInt(history.RiskScoreMax/4, 20)
+		factors = append(factors, fmt.Sprintf("history:max_risk=%d", history.RiskScoreMax))
+	}
+	if strings.TrimSpace(request.Destination) != "" {
+		score += 5
+		factors = append(factors, "context:destination")
+	}
+	if tool == "unknown" {
+		score += 10
+		factors = append(factors, "tool:unknown")
+	}
+	if len(request.Labels) > 0 {
+		score += minInt(len(request.Labels)*2, 8)
+		factors = append(factors, fmt.Sprintf("context:labels=%d", len(request.Labels)))
+	}
+	if len(factors) > 10 {
+		factors = factors[len(factors)-10:]
+	}
+	if score < 0 {
+		score = 0
+	}
+	if score > 100 {
+		score = 100
+	}
+	return score, factors
 }
 
 func decisionID(requestID string) string {
@@ -286,6 +387,32 @@ func secretTerms() []string {
 		"ssh_key",
 		"bearer",
 	}
+}
+
+func injectionTerms() []string {
+	return []string{
+		"ignore previous",
+		"system prompt",
+		"developer message",
+		"prompt injection",
+		"jailbreak",
+		"bypass policy",
+		"reveal prompt",
+		"tool schema",
+		"curl | sh",
+		"base64 -d",
+		"powershell -enc",
+		"invoke-expression",
+		"eval(",
+		"cmd /c",
+	}
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func gatewayTextVariants(values ...string) []string {

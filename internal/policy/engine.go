@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/open-agentic-threat-defense/oadtd/internal/domain"
 )
@@ -12,6 +13,8 @@ import (
 type Engine struct {
 	approvedTools       map[string]struct{}
 	approvedEgressHosts map[string]struct{}
+	historyMu           sync.Mutex
+	history             map[string]*gatewayHistoryState
 }
 
 type Config struct {
@@ -59,6 +62,7 @@ func New(config Config) *Engine {
 	return &Engine{
 		approvedTools:       approvedTools,
 		approvedEgressHosts: approvedEgressHosts,
+		history:             make(map[string]*gatewayHistoryState),
 	}
 }
 
