@@ -32,7 +32,7 @@ import (
 	"github.com/open-agentic-threat-defense/oadtd/internal/store"
 )
 
-const Version = "0.1.0-mvp"
+const Version = "0.2.0"
 
 type App struct {
 	store            *store.Store
