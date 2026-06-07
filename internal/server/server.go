@@ -51,6 +51,8 @@ type App struct {
 	ticketWebhook    exporter.Webhook
 	responseWebhook  exporter.Webhook
 	github           exporter.GitHub
+	jira             exporter.Jira
+	servicenow       exporter.ServiceNow
 	mcpUpstreamURL   string
 	mcpUpstreamToken string
 	oidc             *oidcProvider
@@ -87,6 +89,14 @@ type Options struct {
 	GitHubToken               string
 	GitHubWorkflowFile        string
 	GitHubWorkflowRef         string
+	JiraBaseURL               string
+	JiraEmail                 string
+	JiraAPIToken              string
+	JiraProjectKey            string
+	JiraIssueType             string
+	ServiceNowInstanceURL     string
+	ServiceNowUser            string
+	ServiceNowPassword        string
 	MCPUpstreamURL            string
 	MCPUpstreamToken          string
 	OIDCIssuerURL             string
@@ -225,6 +235,18 @@ func NewWithOptions(options Options) (*App, error) {
 			Token:        options.GitHubToken,
 			WorkflowFile: options.GitHubWorkflowFile,
 			WorkflowRef:  options.GitHubWorkflowRef,
+		},
+		jira: exporter.Jira{
+			BaseURL:    options.JiraBaseURL,
+			Email:      options.JiraEmail,
+			APIToken:   options.JiraAPIToken,
+			ProjectKey: options.JiraProjectKey,
+			IssueType:  options.JiraIssueType,
+		},
+		servicenow: exporter.ServiceNow{
+			InstanceURL: options.ServiceNowInstanceURL,
+			User:        options.ServiceNowUser,
+			Password:    options.ServiceNowPassword,
 		},
 		mcpUpstreamURL:   options.MCPUpstreamURL,
 		mcpUpstreamToken: options.MCPUpstreamToken,
@@ -1466,34 +1488,34 @@ func (a *App) handleDemo(w http.ResponseWriter, r *http.Request) {
 func (a *App) executeTicketAction(r *http.Request, principal auth.Principal, action domain.ResponseAction) (domain.ResponseAction, error) {
 	status := "not_configured"
 	executionError := ""
-	if a.github.Enabled() {
-		if err := a.github.CreateIssue(action); err != nil {
+	connectors := []struct {
+		name    string
+		enabled bool
+		send    func(domain.ResponseAction) error
+	}{
+		{"github_issue", a.github.Enabled(), a.github.CreateIssue},
+		{"jira_issue", a.jira.Enabled(), a.jira.CreateIncident},
+		{"servicenow_incident", a.servicenow.Enabled(), a.servicenow.CreateIncident},
+		{"incident_ticket", a.ticketWebhook.URL != "", a.ticketWebhook.ExportIncidentTicket},
+	}
+	for _, connector := range connectors {
+		if !connector.enabled {
+			continue
+		}
+		if err := connector.send(action); err != nil {
 			status = "failed"
 			executionError = err.Error()
 			a.recordAudit(r, principal, "responses.execute", "response_action", action.ID, "failed", map[string]string{
 				"error":     err.Error(),
-				"connector": "github_issue",
+				"connector": connector.name,
 			})
 		} else {
 			status = "sent"
 			a.recordAudit(r, principal, "responses.execute", "response_action", action.ID, "accepted", map[string]string{
-				"connector": "github_issue",
+				"connector": connector.name,
 			})
 		}
-	} else if a.ticketWebhook.URL != "" {
-		if err := a.ticketWebhook.ExportIncidentTicket(action); err != nil {
-			status = "failed"
-			executionError = err.Error()
-			a.recordAudit(r, principal, "responses.execute", "response_action", action.ID, "failed", map[string]string{
-				"error":     err.Error(),
-				"connector": "incident_ticket",
-			})
-		} else {
-			status = "sent"
-			a.recordAudit(r, principal, "responses.execute", "response_action", action.ID, "accepted", map[string]string{
-				"connector": "incident_ticket",
-			})
-		}
+		break
 	}
 	now := time.Now().UTC()
 	recorded, ok, err := a.recordActionExecutionForTenant(action.ID, now, status, executionError, tenantForPrincipal(principalFromRequest(r)))

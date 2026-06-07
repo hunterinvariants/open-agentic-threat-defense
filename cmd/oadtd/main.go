@@ -41,6 +41,14 @@ func main() {
 	githubToken := flag.String("github-token", os.Getenv("OATD_GITHUB_TOKEN"), "GitHub token for issue and workflow integrations")
 	githubWorkflowFile := flag.String("github-workflow-file", os.Getenv("OATD_GITHUB_WORKFLOW_FILE"), "GitHub workflow file for approved response actions")
 	githubWorkflowRef := flag.String("github-workflow-ref", os.Getenv("OATD_GITHUB_WORKFLOW_REF"), "GitHub ref for workflow dispatch")
+	jiraBaseURL := flag.String("jira-base-url", os.Getenv("OATD_JIRA_BASE_URL"), "Jira base URL for incident tickets")
+	jiraEmail := flag.String("jira-email", os.Getenv("OATD_JIRA_EMAIL"), "Jira account email")
+	jiraAPIToken := flag.String("jira-api-token", os.Getenv("OATD_JIRA_API_TOKEN"), "Jira API token")
+	jiraProjectKey := flag.String("jira-project-key", os.Getenv("OATD_JIRA_PROJECT_KEY"), "Jira project key for incidents")
+	jiraIssueType := flag.String("jira-issue-type", os.Getenv("OATD_JIRA_ISSUE_TYPE"), "Jira issue type (default Task)")
+	servicenowURL := flag.String("servicenow-url", os.Getenv("OATD_SERVICENOW_URL"), "ServiceNow instance URL for incidents")
+	servicenowUser := flag.String("servicenow-user", os.Getenv("OATD_SERVICENOW_USER"), "ServiceNow user")
+	servicenowPassword := flag.String("servicenow-password", os.Getenv("OATD_SERVICENOW_PASSWORD"), "ServiceNow password")
 	mcpUpstreamURL := flag.String("mcp-upstream-url", os.Getenv("OATD_MCP_UPSTREAM_URL"), "upstream MCP server URL for transparent interception")
 	mcpUpstreamToken := flag.String("mcp-upstream-token", os.Getenv("OATD_MCP_UPSTREAM_TOKEN"), "optional bearer token for MCP upstream")
 	oidcIssuerURL := flag.String("oidc-issuer-url", os.Getenv("OATD_OIDC_ISSUER_URL"), "OIDC issuer URL for SSO login")
@@ -140,6 +148,14 @@ func main() {
 		GitHubToken:               *githubToken,
 		GitHubWorkflowFile:        *githubWorkflowFile,
 		GitHubWorkflowRef:         *githubWorkflowRef,
+		JiraBaseURL:               *jiraBaseURL,
+		JiraEmail:                 *jiraEmail,
+		JiraAPIToken:              *jiraAPIToken,
+		JiraProjectKey:            *jiraProjectKey,
+		JiraIssueType:             *jiraIssueType,
+		ServiceNowInstanceURL:     *servicenowURL,
+		ServiceNowUser:            *servicenowUser,
+		ServiceNowPassword:        *servicenowPassword,
 		MCPUpstreamURL:            *mcpUpstreamURL,
 		MCPUpstreamToken:          *mcpUpstreamToken,
 		OIDCIssuerURL:             *oidcIssuerURL,
