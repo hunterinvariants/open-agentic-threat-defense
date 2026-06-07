@@ -51,6 +51,7 @@ type App struct {
 	saml             *samlProvider
 	instanceName     string
 	publicURL        string
+	tenantRegistry   *tenantRegistry
 	exportMu         sync.RWMutex
 	exportErr        string
 	startedAt        time.Time
@@ -58,48 +59,52 @@ type App struct {
 }
 
 type Options struct {
-	WebDir               string
-	DataPath             string
-	PostgresDSN          string
-	APIToken             string
-	Users                []auth.UserConfig
-	Policy               policy.Config
-	CorrelationWindow    time.Duration
-	ThreatPackPath       string
-	AlertWebhookURL      string
-	AlertWebhookToken    string
-	TicketWebhookURL     string
-	TicketWebhookToken   string
-	ResponseWebhookURL   string
-	ResponseWebhookToken string
-	GitHubAPIBaseURL     string
-	GitHubOwner          string
-	GitHubRepo           string
-	GitHubToken          string
-	GitHubWorkflowFile   string
-	GitHubWorkflowRef    string
-	MCPUpstreamURL       string
-	MCPUpstreamToken     string
-	OIDCIssuerURL        string
-	OIDCClientID         string
-	OIDCClientSecret     string
-	OIDCRedirectURL      string
-	OIDCScopes           []string
-	OIDCTenantClaim      string
-	OIDCRoleClaim        string
-	OIDCEmailClaim       string
-	PublicURL            string
-	InstanceName         string
-	SAMLRootURL          string
-	SAMLIDPMetadataURL   string
-	SAMLKeyPath          string
-	SAMLCertPath         string
-	SAMLTenantAttribute  string
-	SAMLRoleAttribute    string
-	SAMLEmailAttribute   string
-	TrustedProxies       []string
-	RetentionWindow      time.Duration
-	GatewayMaxInFlight   int
+	WebDir                    string
+	DataPath                  string
+	PostgresDSN               string
+	APIToken                  string
+	Users                     []auth.UserConfig
+	Policy                    policy.Config
+	CorrelationWindow         time.Duration
+	ThreatPackPath            string
+	AlertWebhookURL           string
+	AlertWebhookToken         string
+	TicketWebhookURL          string
+	TicketWebhookToken        string
+	ResponseWebhookURL        string
+	ResponseWebhookToken      string
+	GitHubAPIBaseURL          string
+	GitHubOwner               string
+	GitHubRepo                string
+	GitHubToken               string
+	GitHubWorkflowFile        string
+	GitHubWorkflowRef         string
+	MCPUpstreamURL            string
+	MCPUpstreamToken          string
+	OIDCIssuerURL             string
+	OIDCClientID              string
+	OIDCClientSecret          string
+	OIDCRedirectURL           string
+	OIDCScopes                []string
+	OIDCTenantClaim           string
+	OIDCRoleClaim             string
+	OIDCEmailClaim            string
+	PublicURL                 string
+	InstanceName              string
+	SAMLRootURL               string
+	SAMLIDPMetadataURL        string
+	SAMLKeyPath               string
+	SAMLCertPath              string
+	SAMLTenantAttribute       string
+	SAMLRoleAttribute         string
+	SAMLEmailAttribute        string
+	TenantIsolationMode       string
+	TenantRegistryPath        string
+	TenantPostgresDSNTemplate string
+	TenantDataPathTemplate    string
+	TrustedProxies            []string
+	RetentionWindow           time.Duration
+	GatewayMaxInFlight        int
 }
 
 func New(webDir string) *App {
@@ -121,6 +126,10 @@ func NewWithOptions(options Options) (*App, error) {
 	} else {
 		st, err = store.NewWithPath(options.DataPath)
 	}
+	if err != nil {
+		return nil, err
+	}
+	tenantRegistry, err := newTenantRegistry(options.TenantRegistryPath, options.TenantIsolationMode, options.TenantPostgresDSNTemplate, options.TenantDataPathTemplate, st)
 	if err != nil {
 		return nil, err
 	}
@@ -184,6 +193,7 @@ func NewWithOptions(options Options) (*App, error) {
 		saml:           samlProvider,
 		instanceName:   defaultString(strings.TrimSpace(options.InstanceName), "primary"),
 		publicURL:      strings.TrimSpace(options.PublicURL),
+		tenantRegistry: tenantRegistry,
 		gatewayLimiter: make(chan struct{}, gatewayLimit),
 		webhook: exporter.Webhook{
 			URL:   options.AlertWebhookURL,
@@ -231,6 +241,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("/api/assets", a.handleAssets)
 	mux.HandleFunc("/api/audit", a.handleAudit)
 	mux.HandleFunc("/api/audit/chain", a.handleAuditChain)
+	mux.HandleFunc("/api/tenants", a.handleTenants)
 	mux.HandleFunc("/api/responses/approve", a.handleResponseApproval)
 	mux.HandleFunc("/api/responses", a.handleResponses)
 	mux.HandleFunc("/api/policies", a.handlePolicies)
@@ -262,11 +273,13 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tenant := tenantForPrincipal(principalFromRequest(r))
-	events, alerts, assets, actions, audits := a.store.CountsForTenant(tenant)
+	events, alerts, assets, actions, audits := a.countsForTenant(tenant)
 	writeJSON(w, http.StatusOK, domain.Status{
 		Version:          Version,
 		InstanceName:     a.instanceName,
 		PublicURL:        a.publicURL,
+		TenantIsolation:  a.tenantIsolationMode(),
+		TenantCount:      a.tenantCount(),
 		UptimeSeconds:    int64(time.Since(a.startedAt).Seconds()),
 		EventCount:       events,
 		AlertCount:       alerts,
@@ -588,7 +601,7 @@ func (a *App) handleEvents(w http.ResponseWriter, r *http.Request) {
 	tenant := tenantForPrincipal(principalFromRequest(r))
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, a.store.ListEventsForTenant(tenant))
+		writeJSON(w, http.StatusOK, a.listEventsForTenant(tenant))
 	case http.MethodPost:
 		events, err := decodeEvents(r)
 		if err != nil {
@@ -637,7 +650,7 @@ func (a *App) handleGatewayDecision(w http.ResponseWriter, r *http.Request) {
 	principal := principalFromRequest(r)
 	tenant := tenantForPrincipal(principal)
 	a.prepareAlerts(decision.Alerts, tenant)
-	added, err := a.store.AddAlerts(decision.Alerts)
+	added, err := a.addAlertsForTenant(decision.Alerts, tenant)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -651,7 +664,7 @@ func (a *App) handleGatewayDecision(w http.ResponseWriter, r *http.Request) {
 	case domain.GatewayRequireApproval:
 		action := a.gatewayActionFromDecision(req, decision, tenant, "required", "")
 		a.prepareAction(&action, tenant)
-		if err := a.store.AddActions([]domain.ResponseAction{action}); err != nil {
+		if err := a.addActionsForTenant([]domain.ResponseAction{action}, tenant); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -659,7 +672,7 @@ func (a *App) handleGatewayDecision(w http.ResponseWriter, r *http.Request) {
 	case domain.GatewayDeny:
 		action := a.gatewayActionFromDecision(req, decision, tenant, "not_required", "blocked")
 		a.prepareAction(&action, tenant)
-		if err := a.store.AddActions([]domain.ResponseAction{action}); err != nil {
+		if err := a.addActionsForTenant([]domain.ResponseAction{action}, tenant); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -701,7 +714,7 @@ func (a *App) handleGatewayExecute(w http.ResponseWriter, r *http.Request) {
 	principal := principalFromRequest(r)
 	tenant := tenantForPrincipal(principal)
 	a.prepareAlerts(decision.Alerts, tenant)
-	added, err := a.store.AddAlerts(decision.Alerts)
+	added, err := a.addAlertsForTenant(decision.Alerts, tenant)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -742,7 +755,7 @@ func (a *App) handleGatewayExecute(w http.ResponseWriter, r *http.Request) {
 	case domain.GatewayRequireApproval:
 		action := a.gatewayActionFromDecision(req, decision, tenant, "required", "")
 		a.prepareAction(&action, tenant)
-		if err := a.store.AddActions([]domain.ResponseAction{action}); err != nil {
+		if err := a.addActionsForTenant([]domain.ResponseAction{action}, tenant); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -762,7 +775,7 @@ func (a *App) handleGatewayExecute(w http.ResponseWriter, r *http.Request) {
 	case domain.GatewayDeny:
 		action := a.gatewayActionFromDecision(req, decision, tenant, "not_required", "blocked")
 		a.prepareAction(&action, tenant)
-		if err := a.store.AddActions([]domain.ResponseAction{action}); err != nil {
+		if err := a.addActionsForTenant([]domain.ResponseAction{action}, tenant); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -826,7 +839,7 @@ func (a *App) handleGatewayProxy(w http.ResponseWriter, r *http.Request) {
 	principal := principalFromRequest(r)
 	tenant := tenantForPrincipal(principal)
 	a.prepareAlerts(decision.Alerts, tenant)
-	added, err := a.store.AddAlerts(decision.Alerts)
+	added, err := a.addAlertsForTenant(decision.Alerts, tenant)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -879,7 +892,7 @@ func (a *App) handleGatewayProxy(w http.ResponseWriter, r *http.Request) {
 		action.Metadata["proxy_upstream_status"] = fmt.Sprintf("%d", upstreamResp.StatusCode)
 		action.Metadata["proxy_content_type"] = upstreamResp.Header.Get("Content-Type")
 		a.prepareAction(&action, tenant)
-		if err := a.store.AddActions([]domain.ResponseAction{action}); err != nil {
+		if err := a.addActionsForTenant([]domain.ResponseAction{action}, tenant); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -904,7 +917,7 @@ func (a *App) handleGatewayProxy(w http.ResponseWriter, r *http.Request) {
 		action.Type = "gateway_proxy"
 		action.Metadata["proxy_upstream_url"] = req.UpstreamURL
 		a.prepareAction(&action, tenant)
-		if err := a.store.AddActions([]domain.ResponseAction{action}); err != nil {
+		if err := a.addActionsForTenant([]domain.ResponseAction{action}, tenant); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -927,7 +940,7 @@ func (a *App) handleGatewayProxy(w http.ResponseWriter, r *http.Request) {
 		action.Type = "gateway_proxy"
 		action.Metadata["proxy_upstream_url"] = req.UpstreamURL
 		a.prepareAction(&action, tenant)
-		if err := a.store.AddActions([]domain.ResponseAction{action}); err != nil {
+		if err := a.addActionsForTenant([]domain.ResponseAction{action}, tenant); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -957,7 +970,7 @@ func (a *App) handleGatewayQueue(w http.ResponseWriter, r *http.Request) {
 	}
 	tenant := tenantForPrincipal(principalFromRequest(r))
 	writeJSON(w, http.StatusOK, map[string]any{
-		"pending_actions": a.store.ListPendingGatewayActionsForTenant(tenant),
+		"pending_actions": a.listPendingGatewayActionsForTenant(tenant),
 	})
 }
 
@@ -973,7 +986,7 @@ func (a *App) handleGatewayAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tenant := tenantForPrincipal(principalFromRequest(r))
-	action, ok := a.store.GetActionForTenant(id, tenant)
+	action, ok := a.getActionForTenant(id, tenant)
 	if !ok {
 		writeError(w, http.StatusNotFound, errors.New("action not found"))
 		return
@@ -986,7 +999,7 @@ func (a *App) handleAlerts(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-	writeJSON(w, http.StatusOK, a.store.ListAlertsForTenant(tenantForPrincipal(principalFromRequest(r))))
+	writeJSON(w, http.StatusOK, a.listAlertsForTenant(tenantForPrincipal(principalFromRequest(r))))
 }
 
 func (a *App) handleAssets(w http.ResponseWriter, r *http.Request) {
@@ -994,7 +1007,7 @@ func (a *App) handleAssets(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-	writeJSON(w, http.StatusOK, a.store.ListAssetsForTenant(tenantForPrincipal(principalFromRequest(r))))
+	writeJSON(w, http.StatusOK, a.listAssetsForTenant(tenantForPrincipal(principalFromRequest(r))))
 }
 
 func (a *App) handleAudit(w http.ResponseWriter, r *http.Request) {
@@ -1002,7 +1015,7 @@ func (a *App) handleAudit(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-	writeJSON(w, http.StatusOK, a.store.ListAuditsForTenant(tenantForPrincipal(principalFromRequest(r))))
+	writeJSON(w, http.StatusOK, a.listAuditsForTenant(tenantForPrincipal(principalFromRequest(r))))
 }
 
 func (a *App) handleAuditChain(w http.ResponseWriter, r *http.Request) {
@@ -1010,7 +1023,38 @@ func (a *App) handleAuditChain(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-	writeJSON(w, http.StatusOK, a.store.AuditChainForTenant(tenantForPrincipal(principalFromRequest(r))))
+	writeJSON(w, http.StatusOK, a.auditChainForTenant(tenantForPrincipal(principalFromRequest(r))))
+}
+
+func (a *App) handleTenants(w http.ResponseWriter, r *http.Request) {
+	principal := principalFromRequest(r)
+	if !principal.HasAny(auth.RoleAdmin) {
+		writeError(w, http.StatusForbidden, errors.New("admin role required"))
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, a.listTenantBackends())
+	case http.MethodPost:
+		var req struct {
+			Tenant      string `json:"tenant"`
+			Mode        string `json:"mode"`
+			PostgresDSN string `json:"postgres_dsn"`
+			DataPath    string `json:"data_path"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		record, err := a.registerTenantBackend(req.Tenant, req.Mode, req.PostgresDSN, req.DataPath)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, record)
+	default:
+		methodNotAllowed(w)
+	}
 }
 
 func (a *App) handlePolicies(w http.ResponseWriter, r *http.Request) {
@@ -1048,7 +1092,7 @@ func (a *App) handleResponseApproval(w http.ResponseWriter, r *http.Request) {
 	if req.ApprovedBy == "" {
 		req.ApprovedBy = "operator"
 	}
-	action, ok, err := a.store.ApproveAction(req.ActionID, req.ApprovedBy, time.Now().UTC())
+	action, ok, err := a.approveActionForTenant(req.ActionID, req.ApprovedBy, time.Now().UTC(), tenantForPrincipal(principalFromRequest(r)))
 	if err != nil {
 		if strings.Contains(err.Error(), "blocked gateway actions cannot be approved") {
 			writeError(w, http.StatusConflict, err)
@@ -1097,7 +1141,7 @@ func (a *App) handleResponses(w http.ResponseWriter, r *http.Request) {
 	tenant := tenantForPrincipal(principalFromRequest(r))
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, a.store.ListActionsForTenant(tenant))
+		writeJSON(w, http.StatusOK, a.listActionsForTenant(tenant))
 	case http.MethodPost:
 		var req struct {
 			AlertID string `json:"alert_id"`
@@ -1110,7 +1154,7 @@ func (a *App) handleResponses(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, errors.New("alert_id is required"))
 			return
 		}
-		alert, ok := a.store.GetAlertForTenant(req.AlertID, tenant)
+		alert, ok := a.getAlertForTenant(req.AlertID, tenant)
 		if !ok {
 			writeError(w, http.StatusNotFound, errors.New("alert not found"))
 			return
@@ -1119,7 +1163,7 @@ func (a *App) handleResponses(w http.ResponseWriter, r *http.Request) {
 		for i := range actions {
 			a.prepareAction(&actions[i], tenant)
 		}
-		if err := a.store.AddActions(actions); err != nil {
+		if err := a.addActionsForTenant(actions, tenant); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -1195,7 +1239,7 @@ func (a *App) executeTicketAction(r *http.Request, principal auth.Principal, act
 		}
 	}
 	now := time.Now().UTC()
-	recorded, ok, err := a.store.RecordActionExecution(action.ID, now, status, executionError)
+	recorded, ok, err := a.recordActionExecutionForTenant(action.ID, now, status, executionError, tenantForPrincipal(principalFromRequest(r)))
 	if err != nil {
 		return domain.ResponseAction{}, err
 	}
@@ -1245,7 +1289,7 @@ func (a *App) executeResponseAction(r *http.Request, principal auth.Principal, a
 		}
 	}
 	now := time.Now().UTC()
-	recorded, ok, err := a.store.RecordActionExecution(action.ID, now, status, executionError)
+	recorded, ok, err := a.recordActionExecutionForTenant(action.ID, now, status, executionError, tenantForPrincipal(principalFromRequest(r)))
 	if err != nil {
 		return domain.ResponseAction{}, err
 	}
@@ -1280,14 +1324,14 @@ func (a *App) executeGatewayToolAction(r *http.Request, principal auth.Principal
 	if result != "" {
 		action.Metadata["gateway_result"] = result
 	}
-	recorded, ok, persistErr := a.store.RecordActionExecution(action.ID, now, action.ExecutionStatus, action.ExecutionError)
+	recorded, ok, persistErr := a.recordActionExecutionForTenant(action.ID, now, action.ExecutionStatus, action.ExecutionError, tenantForPrincipal(principalFromRequest(r)))
 	if persistErr != nil {
 		return domain.ResponseAction{}, "", persistErr
 	}
 	if ok {
 		action = recorded
 	} else {
-		_ = a.store.AddActions([]domain.ResponseAction{action})
+		_ = a.addActionsForTenant([]domain.ResponseAction{action}, tenantForPrincipal(principalFromRequest(r)))
 	}
 	a.recordAudit(r, principal, "gateway.execute", "response_action", action.ID, "accepted", map[string]string{
 		"tool":       action.Target,
@@ -1330,15 +1374,15 @@ func (a *App) ingest(events []domain.Event, tenant string) ([]domain.Alert, erro
 	alerts := []domain.Alert{}
 	for i := range events {
 		a.prepareEvent(&events[i], tenant)
-		if err := a.store.AddEvent(events[i]); err != nil {
+		if err := a.addEventsForTenant([]domain.Event{events[i]}, tenant); err != nil {
 			return nil, err
 		}
 		alerts = append(alerts, a.policy.Evaluate(events[i])...)
 	}
 
-	alerts = append(alerts, a.correlator.Evaluate(a.store.ListEventsForTenant(tenant))...)
+	alerts = append(alerts, a.correlator.Evaluate(a.listEventsForTenant(tenant))...)
 	a.prepareAlerts(alerts, tenant)
-	added, err := a.store.AddAlerts(alerts)
+	added, err := a.addAlertsForTenant(alerts, tenant)
 	if err != nil {
 		return nil, err
 	}
@@ -1579,7 +1623,7 @@ func (a *App) recordAudit(r *http.Request, principal auth.Principal, action stri
 		UserAgent:    r.UserAgent(),
 		Metadata:     metadata,
 	}
-	_ = a.store.AddAudit(event)
+	_ = a.addAuditForTenant(event, principal.Tenant)
 }
 
 func (a *App) exportAlerts(alerts []domain.Alert) {
@@ -1730,6 +1774,235 @@ func sameTenant(left string, right string) bool {
 
 func (a *App) authenticationConfigured() bool {
 	return (a.auth != nil && a.auth.Enabled()) || (a.oidc != nil && a.oidc.Enabled()) || (a.saml != nil && a.saml.Enabled())
+}
+
+func (a *App) storeForTenant(tenant string) (*store.Store, error) {
+	if a.tenantRegistry == nil {
+		return a.store, nil
+	}
+	st, _, err := a.tenantRegistry.ensureTenantStore(tenant)
+	if err != nil {
+		return nil, err
+	}
+	return st, nil
+}
+
+func (a *App) countsForTenant(tenant string) (int, int, int, int, int) {
+	if a.tenantRegistry == nil || !a.tenantRegistry.physicalMode {
+		return a.store.CountsForTenant(tenant)
+	}
+	st, err := a.storeForTenant(tenant)
+	if err != nil {
+		return 0, 0, 0, 0, 0
+	}
+	return st.Counts()
+}
+
+func (a *App) listEventsForTenant(tenant string) []domain.Event {
+	if a.tenantRegistry == nil || !a.tenantRegistry.physicalMode {
+		return a.store.ListEventsForTenant(tenant)
+	}
+	st, err := a.storeForTenant(tenant)
+	if err != nil {
+		return nil
+	}
+	return st.ListEvents()
+}
+
+func (a *App) listAlertsForTenant(tenant string) []domain.Alert {
+	if a.tenantRegistry == nil || !a.tenantRegistry.physicalMode {
+		return a.store.ListAlertsForTenant(tenant)
+	}
+	st, err := a.storeForTenant(tenant)
+	if err != nil {
+		return nil
+	}
+	return st.ListAlerts()
+}
+
+func (a *App) listAssetsForTenant(tenant string) []domain.Asset {
+	if a.tenantRegistry == nil || !a.tenantRegistry.physicalMode {
+		return a.store.ListAssetsForTenant(tenant)
+	}
+	st, err := a.storeForTenant(tenant)
+	if err != nil {
+		return nil
+	}
+	return st.ListAssets()
+}
+
+func (a *App) listAuditsForTenant(tenant string) []domain.AuditEvent {
+	if a.tenantRegistry == nil || !a.tenantRegistry.physicalMode {
+		return a.store.ListAuditsForTenant(tenant)
+	}
+	st, err := a.storeForTenant(tenant)
+	if err != nil {
+		return nil
+	}
+	return st.ListAudits()
+}
+
+func (a *App) auditChainForTenant(tenant string) store.AuditChainSnapshot {
+	if a.tenantRegistry == nil || !a.tenantRegistry.physicalMode {
+		return a.store.AuditChainForTenant(tenant)
+	}
+	st, err := a.storeForTenant(tenant)
+	if err != nil {
+		return store.AuditChainSnapshot{}
+	}
+	return st.AuditChain()
+}
+
+func (a *App) listActionsForTenant(tenant string) []domain.ResponseAction {
+	if a.tenantRegistry == nil || !a.tenantRegistry.physicalMode {
+		return a.store.ListActionsForTenant(tenant)
+	}
+	st, err := a.storeForTenant(tenant)
+	if err != nil {
+		return nil
+	}
+	return st.ListActions()
+}
+
+func (a *App) listPendingGatewayActionsForTenant(tenant string) []domain.ResponseAction {
+	if a.tenantRegistry == nil || !a.tenantRegistry.physicalMode {
+		return a.store.ListPendingGatewayActionsForTenant(tenant)
+	}
+	st, err := a.storeForTenant(tenant)
+	if err != nil {
+		return nil
+	}
+	return st.ListPendingGatewayActions()
+}
+
+func (a *App) getActionForTenant(id string, tenant string) (domain.ResponseAction, bool) {
+	if a.tenantRegistry == nil || !a.tenantRegistry.physicalMode {
+		return a.store.GetActionForTenant(id, tenant)
+	}
+	st, err := a.storeForTenant(tenant)
+	if err != nil {
+		return domain.ResponseAction{}, false
+	}
+	return st.GetAction(id)
+}
+
+func (a *App) getAlertForTenant(id string, tenant string) (domain.Alert, bool) {
+	if a.tenantRegistry == nil || !a.tenantRegistry.physicalMode {
+		return a.store.GetAlertForTenant(id, tenant)
+	}
+	st, err := a.storeForTenant(tenant)
+	if err != nil {
+		return domain.Alert{}, false
+	}
+	return st.GetAlert(id)
+}
+
+func (a *App) addEventsForTenant(events []domain.Event, tenant string) error {
+	if a.tenantRegistry == nil || !a.tenantRegistry.physicalMode {
+		for _, event := range events {
+			if err := a.store.AddEvent(event); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	st, err := a.storeForTenant(tenant)
+	if err != nil {
+		return err
+	}
+	for _, event := range events {
+		if err := st.AddEvent(event); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (a *App) addAlertsForTenant(alerts []domain.Alert, tenant string) ([]domain.Alert, error) {
+	if a.tenantRegistry == nil || !a.tenantRegistry.physicalMode {
+		return a.store.AddAlerts(alerts)
+	}
+	st, err := a.storeForTenant(tenant)
+	if err != nil {
+		return nil, err
+	}
+	return st.AddAlerts(alerts)
+}
+
+func (a *App) addActionsForTenant(actions []domain.ResponseAction, tenant string) error {
+	if a.tenantRegistry == nil || !a.tenantRegistry.physicalMode {
+		return a.store.AddActions(actions)
+	}
+	st, err := a.storeForTenant(tenant)
+	if err != nil {
+		return err
+	}
+	return st.AddActions(actions)
+}
+
+func (a *App) approveActionForTenant(id string, approvedBy string, approvedAt time.Time, tenant string) (domain.ResponseAction, bool, error) {
+	if a.tenantRegistry == nil || !a.tenantRegistry.physicalMode {
+		return a.store.ApproveAction(id, approvedBy, approvedAt)
+	}
+	st, err := a.storeForTenant(tenant)
+	if err != nil {
+		return domain.ResponseAction{}, false, err
+	}
+	return st.ApproveAction(id, approvedBy, approvedAt)
+}
+
+func (a *App) recordActionExecutionForTenant(id string, executedAt time.Time, status string, executionErr string, tenant string) (domain.ResponseAction, bool, error) {
+	if a.tenantRegistry == nil || !a.tenantRegistry.physicalMode {
+		return a.store.RecordActionExecution(id, executedAt, status, executionErr)
+	}
+	st, err := a.storeForTenant(tenant)
+	if err != nil {
+		return domain.ResponseAction{}, false, err
+	}
+	return st.RecordActionExecution(id, executedAt, status, executionErr)
+}
+
+func (a *App) addAuditForTenant(event domain.AuditEvent, tenant string) error {
+	if a.tenantRegistry == nil || !a.tenantRegistry.physicalMode {
+		return a.store.AddAudit(event)
+	}
+	st, err := a.storeForTenant(tenant)
+	if err != nil {
+		return err
+	}
+	return st.AddAudit(event)
+}
+
+func (a *App) listTenantBackends() []map[string]any {
+	if a.tenantRegistry == nil {
+		return []map[string]any{}
+	}
+	return a.tenantRegistry.listAsMaps()
+}
+
+func (a *App) tenantIsolationMode() string {
+	if a.tenantRegistry != nil && a.tenantRegistry.physicalMode {
+		return string(tenantIsolationPhysical)
+	}
+	return string(tenantIsolationLogical)
+}
+
+func (a *App) tenantCount() int {
+	if a.tenantRegistry == nil {
+		return 1
+	}
+	return a.tenantRegistry.count()
+}
+
+func (a *App) registerTenantBackend(tenant string, mode string, postgresDSN string, dataPath string) (map[string]any, error) {
+	if a.tenantRegistry == nil {
+		return nil, errors.New("tenant registry is not configured")
+	}
+	cfg, err := a.tenantRegistry.registerTenant(tenant, mode, postgresDSN, dataPath)
+	if err != nil {
+		return nil, err
+	}
+	return cfg, nil
 }
 
 func normalizeReturnTo(value string) string {

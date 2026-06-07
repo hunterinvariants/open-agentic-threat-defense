@@ -128,6 +128,36 @@
             </div>
             <div id="rules-list" class="rules-list"></div>
           </section>
+
+          <section class="panel">
+            <div class="panel-header">
+              <h2>Tenants</h2>
+              <span class="muted">isolation</span>
+            </div>
+            <div class="stack">
+              <form id="tenant-form" class="stack">
+                <label class="field">
+                  <span>Tenant</span>
+                  <input id="tenant-name" type="text" spellcheck="false" required>
+                </label>
+                <label class="field">
+                  <span>Mode</span>
+                  <input id="tenant-mode" type="text" value="postgres" spellcheck="false" required>
+                </label>
+                <label class="field">
+                  <span>Postgres DSN</span>
+                  <input id="tenant-postgres-dsn" type="text" spellcheck="false" placeholder="postgres://...">
+                </label>
+                <label class="field">
+                  <span>Data path</span>
+                  <input id="tenant-data-path" type="text" spellcheck="false" placeholder="/var/lib/oatd/{tenant}.json">
+                </label>
+                <button id="tenant-submit" class="secondary" type="submit">Provision tenant</button>
+                <p id="tenant-error" class="form-error" role="status" aria-live="polite"></p>
+              </form>
+              <div id="tenants-list" class="rules-list"></div>
+            </div>
+          </section>
         </aside>
       </section>
     </main>

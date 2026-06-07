@@ -8,6 +8,14 @@ const els = {
   loginSubmit: document.querySelector("#login-submit"),
   oidcLogin: document.querySelector("#oidc-login"),
   samlLogin: document.querySelector("#saml-login"),
+  tenantForm: document.querySelector("#tenant-form"),
+  tenantName: document.querySelector("#tenant-name"),
+  tenantMode: document.querySelector("#tenant-mode"),
+  tenantPostgresDSN: document.querySelector("#tenant-postgres-dsn"),
+  tenantDataPath: document.querySelector("#tenant-data-path"),
+  tenantSubmit: document.querySelector("#tenant-submit"),
+  tenantError: document.querySelector("#tenant-error"),
+  tenantsList: document.querySelector("#tenants-list"),
   sessionLabel: document.querySelector("#session-label"),
   version: document.querySelector("#version"),
   loadDemo: document.querySelector("#load-demo"),
@@ -145,13 +153,14 @@ async function refresh() {
     return;
   }
 
-  const [status, alerts, assets, events, actions, rules] = await Promise.all([
+  const [status, alerts, assets, events, actions, rules, tenants] = await Promise.all([
     api("/api/status"),
     api("/api/alerts"),
     api("/api/assets"),
     api("/api/events"),
     api("/api/responses"),
-    api("/api/policies")
+    api("/api/policies"),
+    api("/api/tenants").catch(() => [])
   ]);
 
   renderStatus(status);
@@ -161,6 +170,7 @@ async function refresh() {
   renderEvents(events);
   renderActions(actions);
   renderRules(rules);
+  renderTenants(tenants);
 }
 
 function renderStatus(status) {
@@ -292,6 +302,28 @@ function renderRules(rules) {
   });
 }
 
+function renderTenants(tenants) {
+  els.tenantsList.innerHTML = "";
+  if (!tenants || !tenants.length) {
+    els.tenantsList.append(emptyNode());
+    return;
+  }
+
+  tenants.forEach((tenant) => {
+    const node = document.createElement("article");
+    node.className = "rule-item";
+    node.innerHTML = `
+      <div class="item-top">
+        <div class="item-title">${escapeHtml(tenant.tenant || "")}</div>
+        <span class="badge severity-${tenant.active ? "low" : "medium"}">${escapeHtml(tenant.mode || "")}</span>
+      </div>
+      <div class="item-meta">${escapeHtml(tenant.postgres_dsn || tenant.data_path || "-")}</div>
+      <p class="item-body">schema ${escapeHtml(String(tenant.schema_version || 0))} · ${escapeHtml(tenant.active ? "active" : "inactive")}</p>
+    `;
+    els.tenantsList.append(node);
+  });
+}
+
 function renderGraph(assets, alerts) {
   const width = 760;
   const height = 260;
@@ -391,6 +423,13 @@ async function logout() {
   showLogin("", state.session && state.session.sso ? state.session.sso : { oidc: false, saml: false });
 }
 
+async function provisionTenant(payload) {
+  return api("/api/tenants", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
 els.loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   els.loginSubmit.disabled = true;
@@ -415,6 +454,28 @@ els.oidcLogin.addEventListener("click", () => {
 
 els.samlLogin.addEventListener("click", () => {
   window.location.assign("/api/sso/saml/login");
+});
+
+els.tenantForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  els.tenantSubmit.disabled = true;
+  els.tenantError.textContent = "";
+  try {
+    await provisionTenant({
+      tenant: els.tenantName.value,
+      mode: els.tenantMode.value,
+      postgres_dsn: els.tenantPostgresDSN.value,
+      data_path: els.tenantDataPath.value
+    });
+    els.tenantForm.reset();
+    els.tenantMode.value = "postgres";
+    await refresh();
+  } catch (error) {
+    console.error(error);
+    els.tenantError.textContent = error && error.message ? error.message : "Tenant provisioning failed.";
+  } finally {
+    els.tenantSubmit.disabled = false;
+  }
 });
 
 els.logout.addEventListener("click", () => {

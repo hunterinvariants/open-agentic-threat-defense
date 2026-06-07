@@ -187,6 +187,8 @@ type Status struct {
 	Version          string    `json:"version"`
 	InstanceName     string    `json:"instance_name,omitempty"`
 	PublicURL        string    `json:"public_url,omitempty"`
+	TenantIsolation  string    `json:"tenant_isolation,omitempty"`
+	TenantCount      int       `json:"tenant_count,omitempty"`
 	UptimeSeconds    int64     `json:"uptime_seconds"`
 	EventCount       int       `json:"event_count"`
 	AlertCount       int       `json:"alert_count"`

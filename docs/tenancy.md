@@ -24,6 +24,15 @@ per tenant:
 That model gives you physical isolation at the deployment boundary instead of
 sharing runtime state across tenants.
 
+If you prefer a single control-plane process that provisions isolated stores on
+first use, run with `--tenant-isolation-mode physical` and set one of:
+
+- `--tenant-postgres-dsn-template`
+- `--tenant-data-path-template`
+
+The dashboard exposes a tenant admin panel through `GET /api/tenants` and
+`POST /api/tenants`.
+
 ## Operational Rule
 
 Do not share a Postgres database between tenants if the policy requires

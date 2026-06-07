@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -1166,5 +1167,58 @@ func TestTenantIsolationFiltersReadPaths(t *testing.T) {
 	}
 	if strings.Contains(otherRec.Body.String(), "asset-a") {
 		t.Fatalf("expected tenant-b isolation, got %s", otherRec.Body.String())
+	}
+}
+
+func TestPhysicalTenantIsolationUsesSeparateStores(t *testing.T) {
+	dir := t.TempDir()
+	app, err := NewWithOptions(Options{
+		DataPath:               filepath.Join(dir, "default.json"),
+		TenantIsolationMode:    "physical",
+		TenantRegistryPath:     filepath.Join(dir, "tenants.json"),
+		TenantDataPathTemplate: filepath.Join(dir, "{tenant}.json"),
+		Users: []auth.UserConfig{
+			{Name: "alice", Tenant: "tenant-a", TokenHash: auth.HashToken("alice-secret"), Roles: []string{auth.RoleIngestor, auth.RoleViewer}},
+			{Name: "bob", Tenant: "tenant-b", TokenHash: auth.HashToken("bob-secret"), Roles: []string{auth.RoleViewer}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/events", strings.NewReader(`{"kind":"finding","asset_id":"asset-a","hostname":"asset-a","signal":"tenant-a"}`))
+	req.Header.Set("Authorization", "Bearer alice-secret")
+	rec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected ingest 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	readReq := httptest.NewRequest(http.MethodGet, "/api/events", nil)
+	readReq.Header.Set("Authorization", "Bearer bob-secret")
+	readRec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(readRec, readReq)
+	if readRec.Code != http.StatusOK {
+		t.Fatalf("expected tenant-b read 200, got %d", readRec.Code)
+	}
+	if strings.Contains(readRec.Body.String(), "asset-a") {
+		t.Fatalf("expected tenant-b physical isolation, got %s", readRec.Body.String())
+	}
+	statusReq := httptest.NewRequest(http.MethodGet, "/api/status", nil)
+	statusReq.Header.Set("Authorization", "Bearer alice-secret")
+	statusRec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(statusRec, statusReq)
+	if statusRec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", statusRec.Code)
+	}
+	var status map[string]any
+	if err := json.Unmarshal(statusRec.Body.Bytes(), &status); err != nil {
+		t.Fatalf("decode status: %v", err)
+	}
+	if got := status["tenant_isolation"]; got != "physical" {
+		t.Fatalf("expected physical isolation, got %#v", got)
+	}
+	if got := status["tenant_count"]; got == nil || got.(float64) < 2 {
+		t.Fatalf("expected tenant_count >= 2, got %#v", got)
 	}
 }

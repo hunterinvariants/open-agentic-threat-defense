@@ -226,6 +226,10 @@ Useful endpoints:
 --saml-email-attribute SAML attribute name for username/email
 --public-url           canonical public URL for HA and SSO callbacks
 --instance-name        instance label for HA deployments
+--tenant-isolation-mode logical or physical tenant isolation
+--tenant-registry-path path to the tenant registry JSON
+--tenant-postgres-dsn-template Postgres DSN template for tenant stores
+--tenant-data-path-template file path template for tenant stores
 ```
 
 When users are configured in the policy file, all API endpoints require
@@ -242,6 +246,11 @@ For HA, run multiple replicas behind a load balancer with the same Postgres
 database, shared SAML signing material, and distinct `--instance-name` values.
 `--public-url` should match the canonical external URL used by SSO callbacks
 and health checks.
+
+For physical tenant isolation, set `--tenant-isolation-mode physical` and
+either `--tenant-postgres-dsn-template` or `--tenant-data-path-template`. The
+dashboard exposes a tenant admin panel backed by `GET /api/tenants` and
+`POST /api/tenants`.
 
 ## Policy Configuration
 
