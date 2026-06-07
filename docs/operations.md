@@ -326,3 +326,24 @@ balancer. Use the same Postgres database for all replicas, keep SSO signing
 material shared, and set a distinct `--instance-name` on each node. Set
 `--public-url` to the canonical external URL used by SSO callbacks and health
 checks.
+
+Example instance start:
+
+```bash
+sudo install -d -o root -g root /etc/oadtd
+sudo install -o root -g root -m 0640 /path/to/blue.env /etc/oadtd/blue.env
+sudo install -o root -g root -m 0640 /path/to/green.env /etc/oadtd/green.env
+sudo systemctl daemon-reload
+sudo systemctl enable --now oadtd@blue
+sudo systemctl enable --now oadtd@green
+```
+
+Example failover check:
+
+```bash
+curl -fsS http://blue-host/readyz
+curl -fsS http://green-host/readyz
+```
+
+Use the reverse proxy example in `packaging/nginx/oadtd.conf` to place a load
+balancer in front of multiple instances.
