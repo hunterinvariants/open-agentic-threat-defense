@@ -3,6 +3,9 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -428,7 +431,7 @@ func (a *App) handleSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.auth.RecordLoginAttempt(loginKey, true)
-		a.auth.SetSessionCookie(w, sessionID, info.ExpiresAt, r.TLS != nil)
+		a.auth.SetSessionCookie(w, sessionID, info.ExpiresAt, a.requestIsSecure(r))
 		a.recordAudit(r, info.Principal, "auth.login", "session", "", "accepted", map[string]string{
 			"mode": "session",
 		})
@@ -484,7 +487,7 @@ func (a *App) handleOIDCLogin(w http.ResponseWriter, r *http.Request) {
 		Path:     "/api/sso/oidc",
 		Expires:  time.Now().UTC().Add(oidcStateTTL),
 		HttpOnly: true,
-		Secure:   r.TLS != nil,
+		Secure:   a.requestIsSecure(r),
 		SameSite: http.SameSiteLaxMode,
 	})
 	http.Redirect(w, r, loginURL, http.StatusFound)
@@ -519,7 +522,7 @@ func (a *App) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, errors.New("unable to mint session"))
 		return
 	}
-	a.auth.SetSessionCookie(w, sessionID, info.ExpiresAt, r.TLS != nil)
+	a.auth.SetSessionCookie(w, sessionID, info.ExpiresAt, a.requestIsSecure(r))
 	http.SetCookie(w, &http.Cookie{
 		Name:     oidcStateCookieName,
 		Value:    "",
@@ -587,7 +590,7 @@ func (a *App) handleSAMLComplete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, errors.New("unable to mint session"))
 		return
 	}
-	a.auth.SetSessionCookie(w, sessionID, info.ExpiresAt, r.TLS != nil)
+	a.auth.SetSessionCookie(w, sessionID, info.ExpiresAt, a.requestIsSecure(r))
 	a.recordAudit(r, principal, "auth.login", "session", "", "accepted", map[string]string{
 		"mode": "saml",
 	})
@@ -825,9 +828,9 @@ func (a *App) handleGatewayProxy(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("upstream_url is required"))
 		return
 	}
-	parsedUpstream, err := url.Parse(req.UpstreamURL)
-	if err != nil || parsedUpstream.Scheme == "" || parsedUpstream.Host == "" {
-		writeError(w, http.StatusBadRequest, errors.New("upstream_url must be a valid URL"))
+	parsedUpstream, err := validateProxyUpstreamURL(r.Context(), req.UpstreamURL, isLoopbackRemoteAddr(r.RemoteAddr))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
 		return
 	}
 	if req.ToolCall.ToolName == "" {
@@ -863,10 +866,7 @@ func (a *App) handleGatewayProxy(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		for key, value := range req.Headers {
-			if key == "" || value == "" {
-				continue
-			}
+		for key, value := range sanitizeProxyHeaders(req.Headers) {
 			upstreamReq.Header.Set(key, value)
 		}
 		if upstreamReq.Header.Get("Content-Type") == "" {
@@ -1323,6 +1323,10 @@ func (a *App) executeResponseAction(r *http.Request, principal auth.Principal, a
 		executed, _, err := a.executeGatewayToolAction(r, principal, action, "proceeded")
 		return executed, err
 	}
+	if action.Type == "mcp_proxy" {
+		executed, err := a.executeMCPProxyAction(r, principal, action)
+		return executed, err
+	}
 	status := "not_configured"
 	executionError := ""
 	if a.github.Enabled() && a.github.WorkflowFile != "" {
@@ -1351,6 +1355,60 @@ func (a *App) executeResponseAction(r *http.Request, principal auth.Principal, a
 			status = "sent"
 			a.recordAudit(r, principal, "responses.execute", "response_action", action.ID, "accepted", map[string]string{
 				"connector": "response_webhook",
+			})
+		}
+	}
+	now := time.Now().UTC()
+	recorded, ok, err := a.recordActionExecutionForTenant(action.ID, now, status, executionError, tenantForPrincipal(principalFromRequest(r)))
+	if err != nil {
+		return domain.ResponseAction{}, err
+	}
+	if ok {
+		return recorded, nil
+	}
+	action.ExecutionStatus = status
+	action.ExecutionError = executionError
+	action.ExecutedAt = &now
+	return action, nil
+}
+
+func (a *App) executeMCPProxyAction(r *http.Request, principal auth.Principal, action domain.ResponseAction) (domain.ResponseAction, error) {
+	rawValue := strings.TrimSpace(action.Metadata["mcp_raw_request"])
+	if rawValue == "" {
+		return domain.ResponseAction{}, errors.New("missing mcp raw request")
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(rawValue)
+	if err != nil {
+		return domain.ResponseAction{}, fmt.Errorf("decode mcp raw request: %w", err)
+	}
+	method := strings.TrimSpace(action.Metadata["mcp_method"])
+	if method == "" {
+		method = "tools/call"
+	}
+	upstreamURL := strings.TrimSpace(action.Metadata["mcp_upstream_url"])
+	if upstreamURL == "" {
+		upstreamURL = a.gatewayMCPUpstream()
+	}
+	if upstreamURL == "" {
+		return domain.ResponseAction{}, errors.New("MCP upstream is not configured")
+	}
+	status := "not_configured"
+	executionError := ""
+	if action.ApprovalStatus == "approved" {
+		resp, code, err := a.forwardMCPRequest(r.Context(), raw, method, upstreamURL, a.gatewayMCPUpstreamToken())
+		if err != nil {
+			status = "failed"
+			executionError = err.Error()
+			a.recordAudit(r, principal, "responses.execute", "response_action", action.ID, "failed", map[string]string{
+				"error":     err.Error(),
+				"connector": "mcp_proxy",
+			})
+		} else {
+			status = "sent"
+			action.Metadata["mcp_response_status"] = fmt.Sprintf("%d", code)
+			action.Metadata["mcp_response_body"] = string(resp)
+			a.recordAudit(r, principal, "responses.execute", "response_action", action.ID, "accepted", map[string]string{
+				"connector": "mcp_proxy",
 			})
 		}
 	}
@@ -1597,7 +1655,36 @@ func (a *App) recommendedActionsForAlerts(alerts []domain.Alert) []domain.Respon
 }
 
 func (a *App) nextID(prefix string) string {
-	return fmt.Sprintf("%s-%d", prefix, a.counter.Add(1))
+	buf := make([]byte, 6)
+	if _, err := rand.Read(buf); err != nil {
+		return fmt.Sprintf("%s-%s-%d", prefix, sanitizeIdentifier(a.instanceName), a.counter.Add(1))
+	}
+	return fmt.Sprintf("%s-%s-%d-%s", prefix, sanitizeIdentifier(a.instanceName), a.counter.Add(1), hex.EncodeToString(buf))
+}
+
+func sanitizeIdentifier(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return "default"
+	}
+	builder := strings.Builder{}
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+			builder.WriteRune(r)
+		case r >= '0' && r <= '9':
+			builder.WriteRune(r)
+		case r == '-' || r == '_':
+			builder.WriteRune(r)
+		default:
+			builder.WriteByte('-')
+		}
+	}
+	result := strings.Trim(builder.String(), "-")
+	if result == "" {
+		return "default"
+	}
+	return result
 }
 
 func (a *App) gatewayCriticalStart(w http.ResponseWriter) (func(), bool) {
@@ -2116,6 +2203,26 @@ func (a *App) sourceIP(r *http.Request) string {
 		return host
 	}
 	return r.RemoteAddr
+}
+
+func (a *App) requestIsSecure(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	if !a.isTrustedProxy(r.RemoteAddr) {
+		return false
+	}
+	proto := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")))
+	return proto == "https" || proto == "wss"
+}
+
+func isLoopbackRemoteAddr(remoteAddr string) bool {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(remoteAddr))
+	if err != nil {
+		host = strings.TrimSpace(remoteAddr)
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func (a *App) isTrustedProxy(remoteAddr string) bool {

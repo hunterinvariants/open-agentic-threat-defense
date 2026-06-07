@@ -58,7 +58,7 @@ func (s *Store) rebuildAuditChainLocked() {
 	s.auditChainHead = head
 	s.auditChainValid = valid
 	if head == "" && total > 0 {
-		s.auditChainValid = true
+		s.auditChainValid = false
 	}
 }
 
@@ -82,7 +82,7 @@ func (s *Store) auditChainSnapshotLocked() AuditChainSnapshot {
 		}
 	}
 	if snap.Head == "" {
-		snap.Valid = true
+		snap.Valid = snap.Total == 0
 	}
 	return snap
 }
@@ -125,7 +125,7 @@ func (s *Store) auditChainSnapshotForTenantLocked(tenant string) AuditChainSnaps
 		snap.LastTimestamp = audit.Timestamp
 	}
 	if snap.Head == "" {
-		snap.Valid = true
+		snap.Valid = snap.Total == 0
 	}
 	return snap
 }

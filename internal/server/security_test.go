@@ -58,6 +58,32 @@ func TestTrustedProxyUsesForwardedFor(t *testing.T) {
 	}
 }
 
+func TestTrustedProxyMarksForwardedHttpsAsSecure(t *testing.T) {
+	app, err := NewWithOptions(Options{
+		TrustedProxies: []string{"10.0.0.0/8"},
+		Users:          []auth.UserConfig{{Name: "alice", TokenHash: auth.HashToken("secret"), Roles: []string{auth.RoleOperator}}},
+	})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/session", strings.NewReader(`{"username":"alice","token":"secret"}`))
+	req.RemoteAddr = "10.1.2.3:1234"
+	req.Header.Set("X-Forwarded-Proto", "https")
+	rec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected successful login, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	cookies := rec.Result().Cookies()
+	if len(cookies) == 0 {
+		t.Fatal("expected session cookie")
+	}
+	if !cookies[0].Secure {
+		t.Fatalf("expected secure session cookie behind trusted https proxy: %#v", cookies[0])
+	}
+}
+
 func TestUntrustedProxyIgnoresForwardedFor(t *testing.T) {
 	app, err := NewWithOptions(Options{
 		TrustedProxies: []string{"10.0.0.0/8"},

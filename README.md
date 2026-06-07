@@ -58,6 +58,7 @@ Run with Postgres persistence:
 ```powershell
 docker compose up -d postgres
 $env:OATD_POSTGRES_DSN="postgres://oadtd:oadtd@localhost:5432/oadtd?sslmode=disable"
+$env:OATD_SESSION_SECRET="replace-with-a-strong-random-secret"
 go run ./cmd/oadtd --demo --addr 127.0.0.1:8080 --policy configs\example.policy.json
 ```
 

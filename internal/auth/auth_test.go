@@ -3,8 +3,13 @@ package auth
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 )
+
+func init() {
+	_ = os.Setenv("OATD_SESSION_SECRET", "test-session-secret")
+}
 
 func TestAuthenticateUserToken(t *testing.T) {
 	a := New([]UserConfig{{Name: "alice", TokenHash: HashToken("secret"), Roles: []string{RoleOperator}}}, "")

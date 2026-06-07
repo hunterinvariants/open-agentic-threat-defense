@@ -2,10 +2,13 @@ package server
 
 import (
 	"bytes"
+	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -84,7 +87,7 @@ func (a *App) handleMCPProxy(w http.ResponseWriter, r *http.Request) {
 
 		switch decision.Verdict {
 		case domain.GatewayAllow:
-			resp, status, err := a.forwardMCPRequest(r, raw, rpc.Method)
+			resp, status, err := a.forwardMCPRequest(r.Context(), raw, rpc.Method, a.gatewayMCPUpstream(), a.gatewayMCPUpstreamToken())
 			if err != nil {
 				writeError(w, http.StatusBadGateway, err)
 				return
@@ -93,6 +96,7 @@ func (a *App) handleMCPProxy(w http.ResponseWriter, r *http.Request) {
 			action.Type = "mcp_proxy"
 			action.Metadata["mcp_method"] = rpc.Method
 			action.Metadata["mcp_upstream_url"] = a.gatewayMCPUpstream()
+			action.Metadata["mcp_raw_request"] = base64.RawURLEncoding.EncodeToString(raw)
 			a.prepareAction(&action, tenant)
 			if err := a.store.AddActions([]domain.ResponseAction{action}); err != nil {
 				writeError(w, http.StatusInternalServerError, err)
@@ -114,6 +118,7 @@ func (a *App) handleMCPProxy(w http.ResponseWriter, r *http.Request) {
 			action.Type = "mcp_proxy"
 			action.Metadata["mcp_method"] = rpc.Method
 			action.Metadata["mcp_upstream_url"] = a.gatewayMCPUpstream()
+			action.Metadata["mcp_raw_request"] = base64.RawURLEncoding.EncodeToString(raw)
 			a.prepareAction(&action, tenant)
 			if err := a.store.AddActions([]domain.ResponseAction{action}); err != nil {
 				writeError(w, http.StatusInternalServerError, err)
@@ -146,6 +151,7 @@ func (a *App) handleMCPProxy(w http.ResponseWriter, r *http.Request) {
 			action.Type = "mcp_proxy"
 			action.Metadata["mcp_method"] = rpc.Method
 			action.Metadata["mcp_upstream_url"] = a.gatewayMCPUpstream()
+			action.Metadata["mcp_raw_request"] = base64.RawURLEncoding.EncodeToString(raw)
 			a.prepareAction(&action, tenant)
 			if err := a.store.AddActions([]domain.ResponseAction{action}); err != nil {
 				writeError(w, http.StatusInternalServerError, err)
@@ -176,7 +182,7 @@ func (a *App) handleMCPProxy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	resp, status, err := a.forwardMCPRequest(r, raw, rpc.Method)
+	resp, status, err := a.forwardMCPRequest(r.Context(), raw, rpc.Method, a.gatewayMCPUpstream(), a.gatewayMCPUpstreamToken())
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
@@ -184,12 +190,12 @@ func (a *App) handleMCPProxy(w http.ResponseWriter, r *http.Request) {
 	writeMCPResponse(w, status, resp)
 }
 
-func (a *App) forwardMCPRequest(r *http.Request, raw []byte, method string) ([]byte, int, error) {
-	upstream, err := url.Parse(a.gatewayMCPUpstream())
+func (a *App) forwardMCPRequest(ctx context.Context, raw []byte, method string, upstreamURL string, upstreamToken string) ([]byte, int, error) {
+	upstream, err := url.Parse(upstreamURL)
 	if err != nil {
 		return nil, 0, err
 	}
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, upstream.String(), bytes.NewReader(raw))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, upstream.String(), bytes.NewReader(raw))
 	if err != nil {
 		return nil, 0, err
 	}
@@ -197,7 +203,7 @@ func (a *App) forwardMCPRequest(r *http.Request, raw []byte, method string) ([]b
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-OATD-Proxy", "mcp")
 	req.Header.Set("X-OATD-Method", method)
-	if token := strings.TrimSpace(a.gatewayMCPUpstreamToken()); token != "" {
+	if token := strings.TrimSpace(upstreamToken); token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	client := &http.Client{Timeout: 15 * time.Second}
@@ -211,6 +217,76 @@ func (a *App) forwardMCPRequest(r *http.Request, raw []byte, method string) ([]b
 		return nil, 0, err
 	}
 	return body, resp.StatusCode, nil
+}
+
+func validateProxyUpstreamURL(ctx context.Context, raw string, allowLocalTargets bool) (*url.URL, error) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return nil, err
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return nil, fmt.Errorf("unsupported upstream scheme %q", parsed.Scheme)
+	}
+	host := strings.TrimSpace(parsed.Hostname())
+	if host == "" {
+		return nil, errors.New("upstream_url must include a host")
+	}
+	if isBlockedProxyHost(host) {
+		return nil, fmt.Errorf("upstream host %q is not allowed", host)
+	}
+	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	for _, addr := range addrs {
+		if isBlockedProxyIP(addr.IP) && !allowLocalTargets {
+			return nil, fmt.Errorf("upstream host %q resolves to a blocked address", host)
+		}
+	}
+	return parsed, nil
+}
+
+func isBlockedProxyHost(host string) bool {
+	switch strings.ToLower(strings.TrimSpace(host)) {
+	case "", "localhost", "metadata.google.internal":
+		return true
+	}
+	return false
+}
+
+func isBlockedProxyIP(ip net.IP) bool {
+	if ip == nil {
+		return true
+	}
+	return ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsPrivate() || ip.IsMulticast() || ip.IsUnspecified()
+}
+
+func sanitizeProxyHeaders(headers map[string]string) map[string]string {
+	if len(headers) == 0 {
+		return nil
+	}
+	allowed := map[string]struct{}{
+		"accept":           {},
+		"content-type":     {},
+		"user-agent":       {},
+		"x-request-id":     {},
+		"x-correlation-id": {},
+		"traceparent":      {},
+		"tracestate":       {},
+	}
+	sanitized := make(map[string]string, len(headers))
+	for key, value := range headers {
+		key = strings.ToLower(strings.TrimSpace(key))
+		value = strings.TrimSpace(value)
+		if key == "" || value == "" {
+			continue
+		}
+		if _, ok := allowed[key]; !ok {
+			continue
+		}
+		sanitized[http.CanonicalHeaderKey(key)] = value
+	}
+	return sanitized
 }
 
 func (a *App) toolCallFromMCPRequest(rpc mcpJSONRPCRequest) domain.ToolCallRequest {

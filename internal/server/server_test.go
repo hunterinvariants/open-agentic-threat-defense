@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,6 +12,10 @@ import (
 	"github.com/open-agentic-threat-defense/oadtd/internal/auth"
 	"github.com/open-agentic-threat-defense/oadtd/internal/domain"
 )
+
+func init() {
+	_ = os.Setenv("OATD_SESSION_SECRET", "test-session-secret")
+}
 
 func TestWriteEndpointsRequireTokenWhenConfigured(t *testing.T) {
 	app, err := NewWithOptions(Options{APIToken: "secret"})
@@ -150,6 +155,12 @@ func TestAuditChainEndpointReturnsSnapshot(t *testing.T) {
 
 func TestGatewayProxyForwardsAllowedToolCall(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "" {
+			t.Fatalf("expected sanitized headers to strip authorization, got %q", got)
+		}
+		if got := r.Header.Get("X-Forwarded-For"); got != "" {
+			t.Fatalf("expected sanitized headers to strip x-forwarded-for, got %q", got)
+		}
 		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(`{"ok":true}`))
 	}))
@@ -168,6 +179,7 @@ func TestGatewayProxyForwardsAllowedToolCall(t *testing.T) {
 
 	body := `{"upstream_url":"` + upstream.URL + `","tool_call":{"asset_id":"asset-1","actor":"agent-1","tool_name":"asset_inventory","command":"list"}}`
 	req := httptest.NewRequest(http.MethodPost, "/api/gateway/proxy", strings.NewReader(body))
+	req.RemoteAddr = "127.0.0.1:1234"
 	req.Header.Set("Authorization", "Bearer secret")
 	rec := httptest.NewRecorder()
 	app.Routes().ServeHTTP(rec, req)
@@ -176,6 +188,28 @@ func TestGatewayProxyForwardsAllowedToolCall(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"upstream_body":"{\"ok\":true}"`) {
 		t.Fatalf("expected upstream body in response, got %s", rec.Body.String())
+	}
+}
+
+func TestGatewayProxyRejectsPrivateUpstreamFromRemote(t *testing.T) {
+	app, err := NewWithOptions(Options{
+		Users: []auth.UserConfig{{
+			Name:      "operator",
+			TokenHash: auth.HashToken("secret"),
+			Roles:     []string{auth.RoleOperator},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/proxy", strings.NewReader(`{"upstream_url":"http://127.0.0.1:1234","tool_call":{"tool_name":"asset_inventory"}}`))
+	req.RemoteAddr = "203.0.113.9:1234"
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected private upstream rejection, got %d body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -242,6 +276,66 @@ func TestMCPProxyBlocksUnapprovedTool(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"approval required"`) && !strings.Contains(rec.Body.String(), `"blocked by policy"`) {
 		t.Fatalf("expected json-rpc error, got %s", rec.Body.String())
+	}
+}
+
+func TestMCPProxyApprovalForwardsApprovedCall(t *testing.T) {
+	calls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if got := r.Header.Get("X-OATD-Proxy"); got != "mcp" {
+			t.Fatalf("expected proxy header, got %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"ok":true}}`))
+	}))
+	defer upstream.Close()
+
+	app, err := NewWithOptions(Options{
+		Users: []auth.UserConfig{{
+			Name:      "operator",
+			TokenHash: auth.HashToken("secret"),
+			Roles:     []string{auth.RoleOperator},
+		}},
+		MCPUpstreamURL: upstream.URL,
+	})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/mcp/proxy", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"asset_inventory","arguments":{"command":"inventory scan token=abc123"}}}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected approval required, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var decision struct {
+		Error struct {
+			Data struct {
+				Action struct {
+					ID string `json:"id"`
+				} `json:"action"`
+			} `json:"data"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &decision); err != nil {
+		t.Fatalf("decode approval decision: %v", err)
+	}
+	if decision.Error.Data.Action.ID == "" {
+		t.Fatal("expected pending mcp action")
+	}
+
+	approveReq := httptest.NewRequest(http.MethodPost, "/api/responses/approve", strings.NewReader(`{"action_id":"`+decision.Error.Data.Action.ID+`","approved_by":"alice"}`))
+	approveReq.Header.Set("Authorization", "Bearer secret")
+	approveRec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(approveRec, approveReq)
+	if approveRec.Code != http.StatusAccepted {
+		t.Fatalf("expected approval 202, got %d body=%s", approveRec.Code, approveRec.Body.String())
+	}
+	if calls != 1 {
+		t.Fatalf("expected approved MCP call to be forwarded once, got %d", calls)
 	}
 }
 

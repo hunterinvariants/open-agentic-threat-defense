@@ -88,6 +88,9 @@ func main() {
 	if err := server.ValidateListenAddress(*addr, authConfigured, *insecure); err != nil {
 		log.Fatal(err)
 	}
+	if authConfigured && strings.TrimSpace(os.Getenv("OATD_SESSION_SECRET")) == "" {
+		log.Fatal("OATD_SESSION_SECRET is required when authentication or SSO is configured")
+	}
 	window, err := runtimeConfig.CorrelationWindowDuration()
 	if err != nil {
 		log.Fatal(err)

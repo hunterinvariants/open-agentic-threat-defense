@@ -201,7 +201,7 @@ func (s *Store) ListPendingGatewayActions() []domain.ResponseAction {
 
 	actions := make([]domain.ResponseAction, 0)
 	for _, action := range s.actions {
-		if action.Type == "gateway_tool_call" && action.ApprovalStatus == "required" {
+		if (action.Type == "gateway_tool_call" || action.Type == "mcp_proxy") && action.ApprovalStatus == "required" {
 			actions = append(actions, action)
 		}
 	}
@@ -223,7 +223,7 @@ func (s *Store) ApproveAction(id string, approvedBy string, approvedAt time.Time
 		if s.actions[i].ID != id {
 			continue
 		}
-		if s.actions[i].Type == "gateway_tool_call" && s.actions[i].ExecutionStatus == "blocked" {
+		if (s.actions[i].Type == "gateway_tool_call" || s.actions[i].Type == "mcp_proxy") && s.actions[i].ExecutionStatus == "blocked" {
 			return domain.ResponseAction{}, true, errors.New("blocked gateway actions cannot be approved")
 		}
 		s.actions[i].ApprovalStatus = "approved"

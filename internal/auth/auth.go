@@ -73,7 +73,7 @@ func New(users []UserConfig, legacyToken string) *Authenticator {
 	if legacyToken != "" {
 		authenticator.legacyHash = HashToken(legacyToken)
 	}
-	authenticator.sessionKey = deriveSessionKey(authenticator.users, authenticator.legacyHash, os.Getenv("OATD_SESSION_SECRET"))
+	authenticator.sessionKey = deriveSessionKey(os.Getenv("OATD_SESSION_SECRET"))
 	return authenticator
 }
 
@@ -397,25 +397,12 @@ func constantTimeEqual(got string, want string) bool {
 	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }
 
-func deriveSessionKey(users []UserConfig, legacyHash string, explicitSecret string) []byte {
+func deriveSessionKey(explicitSecret string) []byte {
 	if value := strings.TrimSpace(explicitSecret); value != "" {
 		sum := sha256.Sum256([]byte(value))
 		return sum[:]
 	}
-	builder := strings.Builder{}
-	builder.WriteString(legacyHash)
-	for _, user := range users {
-		builder.WriteString("|")
-		builder.WriteString(user.Name)
-		builder.WriteString("|")
-		builder.WriteString(user.Tenant)
-		builder.WriteString("|")
-		builder.WriteString(strings.Join(user.Roles, ","))
-		builder.WriteString("|")
-		builder.WriteString(user.TokenHash)
-	}
-	sum := sha256.Sum256([]byte(builder.String()))
-	return sum[:]
+	return nil
 }
 
 func (a *Authenticator) issueSession(info SessionInfo) (string, error) {

@@ -27,6 +27,7 @@ For production, set Postgres in `/etc/oadtd/oadtd.env`:
 
 ```text
 OATD_POSTGRES_DSN=postgres://oadtd:oadtd@postgres:5432/oadtd?sslmode=disable
+OATD_SESSION_SECRET=<strong-random-secret>
 ```
 
 For local development and integration tests, start the bundled Compose service:
