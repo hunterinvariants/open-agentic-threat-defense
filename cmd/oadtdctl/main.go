@@ -132,6 +132,8 @@ func replay(args []string) error {
 	baseURL := fs.String("url", "http://localhost:8080", "OATD base URL")
 	token := fs.String("token", os.Getenv("OATD_API_TOKEN"), "optional API token")
 	batchSize := fs.Int("batch-size", 100, "events per request")
+	maxRetries := fs.Int("max-retries", 3, "retry attempts per batch on transient failure")
+	retryBackoff := fs.Duration("retry-backoff", 500*time.Millisecond, "base backoff between retries (doubles each attempt)")
 	dryRun := fs.Bool("dry-run", false, "parse input without sending events")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -142,32 +144,98 @@ func replay(args []string) error {
 	if *batchSize < 1 {
 		return errors.New("--batch-size must be at least 1")
 	}
+	if *maxRetries < 0 {
+		return errors.New("--max-retries must be >= 0")
+	}
 
 	events, err := readEvents(*filePath)
 	if err != nil {
 		return err
 	}
 	if *dryRun {
-		fmt.Printf("events=%d dry_run=true\n", len(events))
+		fmt.Printf("events=%d batches=%d dry_run=true\n", len(events), batchCount(len(events), *batchSize))
 		return nil
 	}
 
 	client := &http.Client{Timeout: 15 * time.Second}
-	totalAlerts := 0
+	report := replayReport{TotalEvents: len(events), BatchSize: *batchSize}
 	for start := 0; start < len(events); start += *batchSize {
 		end := start + *batchSize
 		if end > len(events) {
 			end = len(events)
 		}
-		alerts, err := postEvents(client, *baseURL, *token, events[start:end])
-		if err != nil {
-			return err
+		report.Batches++
+		alerts, attempts, err := postEventsWithRetry(client, *baseURL, *token, events[start:end], *maxRetries, *retryBackoff)
+		if attempts > 1 {
+			report.Retries += attempts - 1
 		}
-		totalAlerts += alerts
+		if err != nil {
+			report.FailedBatches++
+			report.FailedEvents += end - start
+			report.Errors = append(report.Errors, fmt.Sprintf("batch %d (events %d-%d): %v", report.Batches, start, end-1, err))
+			continue
+		}
+		report.SentBatches++
+		report.SentEvents += end - start
+		report.AlertsCreated += alerts
 	}
 
-	fmt.Printf("events=%d alerts_created=%d\n", len(events), totalAlerts)
+	report.print()
+	if report.FailedBatches > 0 {
+		return fmt.Errorf("replay completed with %d of %d batch(es) failed", report.FailedBatches, report.Batches)
+	}
 	return nil
+}
+
+type replayReport struct {
+	TotalEvents   int
+	BatchSize     int
+	Batches       int
+	SentBatches   int
+	FailedBatches int
+	SentEvents    int
+	FailedEvents  int
+	AlertsCreated int
+	Retries       int
+	Errors        []string
+}
+
+func (r replayReport) print() {
+	fmt.Println("replay report:")
+	fmt.Printf("  events_total=%d batch_size=%d batches=%d\n", r.TotalEvents, r.BatchSize, r.Batches)
+	fmt.Printf("  sent_batches=%d failed_batches=%d retries=%d\n", r.SentBatches, r.FailedBatches, r.Retries)
+	fmt.Printf("  sent_events=%d failed_events=%d alerts_created=%d\n", r.SentEvents, r.FailedEvents, r.AlertsCreated)
+	for _, e := range r.Errors {
+		fmt.Printf("  error: %s\n", e)
+	}
+}
+
+func batchCount(events int, size int) int {
+	if size < 1 || events <= 0 {
+		return 0
+	}
+	return (events + size - 1) / size
+}
+
+func postEventsWithRetry(client *http.Client, baseURL string, token string, events []domain.Event, maxRetries int, backoff time.Duration) (int, int, error) {
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		alerts, err := postEvents(client, baseURL, token, events)
+		if err == nil {
+			return alerts, attempt + 1, nil
+		}
+		lastErr = err
+		if attempt < maxRetries {
+			wait := backoff << uint(attempt)
+			if wait > 30*time.Second {
+				wait = 30 * time.Second
+			}
+			if wait > 0 {
+				time.Sleep(wait)
+			}
+		}
+	}
+	return 0, maxRetries + 1, lastErr
 }
 
 func backup(args []string) error {
