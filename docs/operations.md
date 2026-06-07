@@ -294,7 +294,9 @@ Generate a hash:
 
 The dashboard uses a session cookie instead of storing bearer tokens in the
 browser. It also supports OIDC SSO when `OATD_OIDC_ISSUER_URL`,
-`OATD_OIDC_CLIENT_ID`, and `OATD_OIDC_REDIRECT_URL` are configured.
+`OATD_OIDC_CLIENT_ID`, and `OATD_OIDC_REDIRECT_URL` are configured, plus SAML
+SSO when `OATD_SAML_ROOT_URL`, `OATD_SAML_IDP_METADATA_URL`, and a signing
+key/certificate are configured.
 
 Login:
 
@@ -316,3 +318,11 @@ Logout:
 ```http
 DELETE /api/session
 ```
+
+## High Availability
+
+OADTD is designed to run as multiple stateless replicas behind a load
+balancer. Use the same Postgres database for all replicas, keep SSO signing
+material shared, and set a distinct `--instance-name` on each node. Set
+`--public-url` to the canonical external URL used by SSO callbacks and health
+checks.

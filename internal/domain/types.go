@@ -185,6 +185,8 @@ type RuleDescriptor struct {
 
 type Status struct {
 	Version          string    `json:"version"`
+	InstanceName     string    `json:"instance_name,omitempty"`
+	PublicURL        string    `json:"public_url,omitempty"`
 	UptimeSeconds    int64     `json:"uptime_seconds"`
 	EventCount       int       `json:"event_count"`
 	AlertCount       int       `json:"alert_count"`

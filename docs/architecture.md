@@ -143,9 +143,14 @@ reload.
 ### Authentication And RBAC
 
 API access supports user tokens with RBAC roles configured in the policy file
-and optional OIDC SSO for dashboard sign-in.
+and optional OIDC or SAML SSO for dashboard sign-in.
 Token values are not stored in config; only SHA-256 token hashes are stored.
 The legacy `--api-token` path behaves as an admin token for compatibility.
+
+For high availability, the application layer is stateless: sessions are signed,
+Postgres is the shared persistence layer, and replicas can be scaled behind a
+load balancer with the same SSO configuration and a distinct `--instance-name`
+per node.
 
 ### Audit Logging
 

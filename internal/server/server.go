@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/crewjam/saml/samlsp"
 	"github.com/open-agentic-threat-defense/oadtd/internal/auth"
 	"github.com/open-agentic-threat-defense/oadtd/internal/correlator"
 	"github.com/open-agentic-threat-defense/oadtd/internal/domain"
@@ -47,6 +48,9 @@ type App struct {
 	mcpUpstreamURL   string
 	mcpUpstreamToken string
 	oidc             *oidcProvider
+	saml             *samlProvider
+	instanceName     string
+	publicURL        string
 	exportMu         sync.RWMutex
 	exportErr        string
 	startedAt        time.Time
@@ -84,6 +88,15 @@ type Options struct {
 	OIDCTenantClaim      string
 	OIDCRoleClaim        string
 	OIDCEmailClaim       string
+	PublicURL            string
+	InstanceName         string
+	SAMLRootURL          string
+	SAMLIDPMetadataURL   string
+	SAMLKeyPath          string
+	SAMLCertPath         string
+	SAMLTenantAttribute  string
+	SAMLRoleAttribute    string
+	SAMLEmailAttribute   string
 	TrustedProxies       []string
 	RetentionWindow      time.Duration
 	GatewayMaxInFlight   int
@@ -133,6 +146,33 @@ func NewWithOptions(options Options) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	samlConfigured := strings.TrimSpace(options.SAMLRootURL) != "" ||
+		strings.TrimSpace(options.SAMLIDPMetadataURL) != "" ||
+		strings.TrimSpace(options.SAMLKeyPath) != "" ||
+		strings.TrimSpace(options.SAMLCertPath) != "" ||
+		strings.TrimSpace(options.SAMLTenantAttribute) != "" ||
+		strings.TrimSpace(options.SAMLRoleAttribute) != "" ||
+		strings.TrimSpace(options.SAMLEmailAttribute) != ""
+	var samlProvider *samlProvider
+	if samlConfigured {
+		samlRootURL := defaultString(strings.TrimSpace(options.PublicURL), strings.TrimSpace(options.SAMLRootURL))
+		samlProvider, err = newSAMLProvider(samlOptions{
+			RootURL:         samlRootURL,
+			IDPMetadataURL:  strings.TrimSpace(options.SAMLIDPMetadataURL),
+			KeyPath:         strings.TrimSpace(options.SAMLKeyPath),
+			CertPath:        strings.TrimSpace(options.SAMLCertPath),
+			CompletePath:    "/api/sso/saml/complete",
+			LoginPath:       "/api/sso/saml/login",
+			MetadataPath:    "/saml/metadata",
+			ACSPath:         "/saml/acs",
+			TenantAttribute: defaultString(strings.TrimSpace(options.SAMLTenantAttribute), "tenant"),
+			RoleAttribute:   defaultString(strings.TrimSpace(options.SAMLRoleAttribute), "roles"),
+			NameAttribute:   defaultString(strings.TrimSpace(options.SAMLEmailAttribute), "email"),
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
 	return &App{
 		store:          st,
 		policy:         policy.New(options.Policy),
@@ -141,6 +181,9 @@ func NewWithOptions(options Options) (*App, error) {
 		webDir:         options.WebDir,
 		auth:           authenticator,
 		trustedProxies: trustedProxies,
+		saml:           samlProvider,
+		instanceName:   defaultString(strings.TrimSpace(options.InstanceName), "primary"),
+		publicURL:      strings.TrimSpace(options.PublicURL),
 		gatewayLimiter: make(chan struct{}, gatewayLimit),
 		webhook: exporter.Webhook{
 			URL:   options.AlertWebhookURL,
@@ -177,6 +220,8 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("/api/session", a.handleSession)
 	mux.HandleFunc("/api/sso/oidc/login", a.handleOIDCLogin)
 	mux.HandleFunc("/api/sso/oidc/callback", a.handleOIDCCallback)
+	mux.HandleFunc("/api/sso/saml/login", a.handleSAMLLogin)
+	mux.Handle("/api/sso/saml/complete", a.requireSAMLAccount(http.HandlerFunc(a.handleSAMLComplete)))
 	mux.HandleFunc("/api/gateway/decide", a.handleGatewayDecision)
 	mux.HandleFunc("/api/gateway/execute", a.handleGatewayExecute)
 	mux.HandleFunc("/api/gateway/queue", a.handleGatewayQueue)
@@ -192,6 +237,9 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("/api/demo", a.handleDemo)
 	mux.HandleFunc("/api/gateway/proxy", a.handleGatewayProxy)
 	mux.HandleFunc("/api/mcp/proxy", a.handleMCPProxy)
+	if a.saml != nil && a.saml.Enabled() {
+		mux.Handle("/saml/", a.saml)
+	}
 	mux.Handle("/", a.staticHandler())
 	return withSecurityHeaders(a.withAuth(mux))
 }
@@ -217,6 +265,8 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 	events, alerts, assets, actions, audits := a.store.CountsForTenant(tenant)
 	writeJSON(w, http.StatusOK, domain.Status{
 		Version:          Version,
+		InstanceName:     a.instanceName,
+		PublicURL:        a.publicURL,
 		UptimeSeconds:    int64(time.Since(a.startedAt).Seconds()),
 		EventCount:       events,
 		AlertCount:       alerts,
@@ -268,12 +318,13 @@ func (a *App) handleReady(w http.ResponseWriter, r *http.Request) {
 func (a *App) handleSession(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		if a.auth == nil || !a.auth.Enabled() {
+		if !a.authenticationConfigured() {
 			writeJSON(w, http.StatusOK, map[string]any{
 				"authenticated": true,
 				"mode":          "open",
 				"sso": map[string]any{
 					"oidc": false,
+					"saml": false,
 				},
 				"principal": auth.Principal{
 					Name:   "anonymous",
@@ -288,8 +339,10 @@ func (a *App) handleSession(w http.ResponseWriter, r *http.Request) {
 				"authenticated": true,
 				"mode":          "session",
 				"sso": map[string]any{
-					"oidc":      a.oidc != nil && a.oidc.Enabled(),
-					"login_url": "/api/sso/oidc/login",
+					"oidc":           a.oidc != nil && a.oidc.Enabled(),
+					"oidc_login_url": "/api/sso/oidc/login",
+					"saml":           a.saml != nil && a.saml.Enabled(),
+					"saml_login_url": "/api/sso/saml/login",
 				},
 				"principal":  info.Principal,
 				"expires_at": info.ExpiresAt,
@@ -301,8 +354,10 @@ func (a *App) handleSession(w http.ResponseWriter, r *http.Request) {
 				"authenticated": true,
 				"mode":          "token",
 				"sso": map[string]any{
-					"oidc":      a.oidc != nil && a.oidc.Enabled(),
-					"login_url": "/api/sso/oidc/login",
+					"oidc":           a.oidc != nil && a.oidc.Enabled(),
+					"oidc_login_url": "/api/sso/oidc/login",
+					"saml":           a.saml != nil && a.saml.Enabled(),
+					"saml_login_url": "/api/sso/saml/login",
 				},
 				"principal": principal,
 			})
@@ -311,12 +366,14 @@ func (a *App) handleSession(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"authenticated": false,
 			"sso": map[string]any{
-				"oidc":      a.oidc != nil && a.oidc.Enabled(),
-				"login_url": "/api/sso/oidc/login",
+				"oidc":           a.oidc != nil && a.oidc.Enabled(),
+				"oidc_login_url": "/api/sso/oidc/login",
+				"saml":           a.saml != nil && a.saml.Enabled(),
+				"saml_login_url": "/api/sso/saml/login",
 			},
 		})
 	case http.MethodPost:
-		if a.auth == nil || !a.auth.Enabled() {
+		if !a.authenticationConfigured() {
 			writeJSON(w, http.StatusAccepted, map[string]any{
 				"authenticated": true,
 				"mode":          "open",
@@ -368,7 +425,7 @@ func (a *App) handleSession(w http.ResponseWriter, r *http.Request) {
 			"expires_at":    info.ExpiresAt,
 		})
 	case http.MethodDelete:
-		if a.auth == nil || !a.auth.Enabled() {
+		if !a.authenticationConfigured() {
 			writeJSON(w, http.StatusOK, map[string]any{
 				"authenticated": true,
 				"mode":          "open",
@@ -461,6 +518,66 @@ func (a *App) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	a.recordAudit(r, principal, "auth.login", "session", "", "accepted", map[string]string{
 		"mode": "oidc",
 	})
+	if returnTo == "" {
+		returnTo = "/"
+	}
+	http.Redirect(w, r, returnTo, http.StatusFound)
+}
+
+func (a *App) requireSAMLAccount(next http.Handler) http.Handler {
+	if a.saml == nil || !a.saml.Enabled() {
+		return next
+	}
+	return a.saml.RequireAccount(next)
+}
+
+func (a *App) handleSAMLLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	if a.saml == nil || !a.saml.Enabled() {
+		writeError(w, http.StatusNotFound, errors.New("saml sso is not configured"))
+		return
+	}
+	returnTo := normalizeReturnTo(r.URL.Query().Get("return_to"))
+	target := "/api/sso/saml/complete"
+	if returnTo != "" {
+		target += "?return_to=" + url.QueryEscape(returnTo)
+	}
+	http.Redirect(w, r, target, http.StatusFound)
+}
+
+func (a *App) handleSAMLComplete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	if a.saml == nil || !a.saml.Enabled() {
+		writeError(w, http.StatusNotFound, errors.New("saml sso is not configured"))
+		return
+	}
+	session := samlsp.SessionFromContext(r.Context())
+	attributes, ok := session.(samlsp.SessionWithAttributes)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, errors.New("missing saml session"))
+		return
+	}
+	principal, err := a.saml.principalFromAttributes(attributes.GetAttributes())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	info, sessionID, ok := a.auth.MintSession(principal)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, errors.New("unable to mint session"))
+		return
+	}
+	a.auth.SetSessionCookie(w, sessionID, info.ExpiresAt, r.TLS != nil)
+	a.recordAudit(r, principal, "auth.login", "session", "", "accepted", map[string]string{
+		"mode": "saml",
+	})
+	returnTo := normalizeReturnTo(r.URL.Query().Get("return_to"))
 	if returnTo == "" {
 		returnTo = "/"
 	}
@@ -1556,7 +1673,7 @@ func withSecurityHeaders(next http.Handler) http.Handler {
 
 func (a *App) withAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api/session" || a.auth == nil || !a.auth.Enabled() {
+		if !strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api/session" || strings.HasPrefix(r.URL.Path, "/api/sso/") || !a.authenticationConfigured() {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -1609,6 +1726,24 @@ func tenantOrDefault(value string) string {
 
 func sameTenant(left string, right string) bool {
 	return tenantOrDefault(left) == tenantOrDefault(right)
+}
+
+func (a *App) authenticationConfigured() bool {
+	return (a.auth != nil && a.auth.Enabled()) || (a.oidc != nil && a.oidc.Enabled()) || (a.saml != nil && a.saml.Enabled())
+}
+
+func normalizeReturnTo(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if !strings.HasPrefix(value, "/") {
+		return ""
+	}
+	if strings.HasPrefix(value, "//") {
+		return ""
+	}
+	return value
 }
 
 func (a *App) sourceIP(r *http.Request) string {

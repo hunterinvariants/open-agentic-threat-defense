@@ -11,7 +11,7 @@
     <form id="login-form" class="login-panel">
       <p class="eyebrow">Open Agentic Threat Defense</p>
       <h1>Sign in</h1>
-      <p class="login-copy">Use a configured user name and token, or sign in with OIDC SSO, to open the dashboard.</p>
+      <p class="login-copy">Use a configured user name and token, or sign in with OIDC or SAML SSO, to open the dashboard.</p>
       <label class="field">
         <span>User</span>
         <input id="login-username" type="text" autocomplete="username" spellcheck="false" required>
@@ -21,7 +21,8 @@
         <input id="login-token" type="password" autocomplete="current-password" spellcheck="false" required>
       </label>
       <button id="login-submit" class="primary" type="submit">Sign in</button>
-      <button id="oidc-login" class="secondary" type="button">Sign in with SSO</button>
+      <button id="oidc-login" class="secondary" type="button">Sign in with OIDC</button>
+      <button id="saml-login" class="secondary" type="button">Sign in with SAML</button>
       <p id="login-error" class="form-error" role="status" aria-live="polite"></p>
     </form>
   </section>

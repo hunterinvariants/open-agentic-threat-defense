@@ -66,6 +66,22 @@ func TestReadEndpointsRequireTokenWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestSSORoutesBypassTokenAuth(t *testing.T) {
+	app, err := NewWithOptions(Options{APIToken: "secret"})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+
+	for _, path := range []string{"/api/sso/oidc/login", "/api/sso/saml/login"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		app.Routes().ServeHTTP(rec, req)
+		if rec.Code == http.StatusUnauthorized {
+			t.Fatalf("%s: expected route to bypass token auth, got 401", path)
+		}
+	}
+}
+
 func TestHealthAndReadyEndpoints(t *testing.T) {
 	app, err := NewWithOptions(Options{})
 	if err != nil {
@@ -79,6 +95,33 @@ func TestHealthAndReadyEndpoints(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("%s: expected 200, got %d", path, rec.Code)
 		}
+	}
+}
+
+func TestStatusIncludesHAFields(t *testing.T) {
+	app, err := NewWithOptions(Options{
+		InstanceName: "blue",
+		PublicURL:    "https://oatd.example",
+	})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/status", nil)
+	rec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	var status map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &status); err != nil {
+		t.Fatalf("decode status: %v", err)
+	}
+	if got := status["instance_name"]; got != "blue" {
+		t.Fatalf("expected instance_name blue, got %#v", got)
+	}
+	if got := status["public_url"]; got != "https://oatd.example" {
+		t.Fatalf("expected public_url, got %#v", got)
 	}
 }
 

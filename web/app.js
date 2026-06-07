@@ -7,6 +7,7 @@ const els = {
   loginError: document.querySelector("#login-error"),
   loginSubmit: document.querySelector("#login-submit"),
   oidcLogin: document.querySelector("#oidc-login"),
+  samlLogin: document.querySelector("#saml-login"),
   sessionLabel: document.querySelector("#session-label"),
   version: document.querySelector("#version"),
   loadDemo: document.querySelector("#load-demo"),
@@ -75,11 +76,12 @@ function isLoggedIn() {
 function setView(session) {
   state.session = session;
   const loggedIn = isLoggedIn();
-  const ssoEnabled = Boolean(session && session.sso && session.sso.oidc);
+  const ssoEnabled = Boolean(session && session.sso && (session.sso.oidc || session.sso.saml));
   document.body.classList.toggle("logged-out", !loggedIn);
   els.loginView.hidden = loggedIn;
   els.appView.hidden = !loggedIn;
   els.oidcLogin.hidden = loggedIn || !ssoEnabled;
+  els.samlLogin.hidden = loggedIn || !ssoEnabled;
   if (loggedIn) {
     const principal = session.principal || {};
     const mode = session.mode || "session";
@@ -90,7 +92,7 @@ function setView(session) {
   }
 }
 
-function showLogin(message = "", sso = { oidc: false }) {
+function showLogin(message = "", sso = { oidc: false, saml: false }) {
   stopPolling();
   setView({ authenticated: false, sso });
   els.loginError.textContent = message;
@@ -122,7 +124,7 @@ function stopPolling() {
 function handleApiFailure(error) {
   if (error && error.status === 401) {
     sessionStorage.removeItem("oatd_api_token");
-    showLogin("Session expired.", state.session && state.session.sso ? state.session.sso : { oidc: false });
+    showLogin("Session expired.", state.session && state.session.sso ? state.session.sso : { oidc: false, saml: false });
     return;
   }
   console.error(error);
@@ -134,7 +136,7 @@ async function loadSession() {
     showApp(session);
     return true;
   }
-  showLogin("", session && session.sso ? session.sso : { oidc: false });
+  showLogin("", session && session.sso ? session.sso : { oidc: false, saml: false });
   return false;
 }
 
@@ -386,7 +388,7 @@ async function logout() {
     handleApiFailure(error);
   }
   sessionStorage.removeItem("oatd_api_token");
-  showLogin("", state.session && state.session.sso ? state.session.sso : { oidc: false });
+  showLogin("", state.session && state.session.sso ? state.session.sso : { oidc: false, saml: false });
 }
 
 els.loginForm.addEventListener("submit", async (event) => {
@@ -409,6 +411,10 @@ els.loginForm.addEventListener("submit", async (event) => {
 
 els.oidcLogin.addEventListener("click", () => {
   window.location.assign("/api/sso/oidc/login");
+});
+
+els.samlLogin.addEventListener("click", () => {
+  window.location.assign("/api/sso/saml/login");
 });
 
 els.logout.addEventListener("click", () => {

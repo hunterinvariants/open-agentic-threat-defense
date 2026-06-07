@@ -48,6 +48,15 @@ func main() {
 	oidcTenantClaim := flag.String("oidc-tenant-claim", os.Getenv("OATD_OIDC_TENANT_CLAIM"), "OIDC claim name for tenant assignment")
 	oidcRoleClaim := flag.String("oidc-role-claim", os.Getenv("OATD_OIDC_ROLE_CLAIM"), "OIDC claim name for roles")
 	oidcEmailClaim := flag.String("oidc-email-claim", os.Getenv("OATD_OIDC_EMAIL_CLAIM"), "OIDC claim name for user name/email")
+	samlRootURL := flag.String("saml-root-url", os.Getenv("OATD_SAML_ROOT_URL"), "SAML service provider root URL")
+	samlIDPMetadataURL := flag.String("saml-idp-metadata-url", os.Getenv("OATD_SAML_IDP_METADATA_URL"), "SAML identity provider metadata URL")
+	samlKeyPath := flag.String("saml-key-path", os.Getenv("OATD_SAML_KEY_PATH"), "SAML signing key path")
+	samlCertPath := flag.String("saml-cert-path", os.Getenv("OATD_SAML_CERT_PATH"), "SAML signing certificate path")
+	samlTenantAttribute := flag.String("saml-tenant-attribute", os.Getenv("OATD_SAML_TENANT_ATTRIBUTE"), "SAML attribute name for tenant assignment")
+	samlRoleAttribute := flag.String("saml-role-attribute", os.Getenv("OATD_SAML_ROLE_ATTRIBUTE"), "SAML attribute name for roles")
+	samlEmailAttribute := flag.String("saml-email-attribute", os.Getenv("OATD_SAML_EMAIL_ATTRIBUTE"), "SAML attribute name for user name/email")
+	publicURL := flag.String("public-url", os.Getenv("OATD_PUBLIC_URL"), "public URL for HA and SSO callbacks")
+	instanceName := flag.String("instance-name", os.Getenv("OATD_INSTANCE_NAME"), "instance name for HA deployments")
 	trustedProxies := flag.String("trusted-proxies", os.Getenv("OATD_TRUSTED_PROXIES"), "comma-separated list of trusted proxy CIDRs or IPs")
 	retentionWindow := flag.String("retention-window", defaultString(os.Getenv("OATD_RETENTION_WINDOW"), "30d"), "retention window for events, alerts, actions, and audits")
 	gatewayMaxInFlight := flag.Int("gateway-max-in-flight", defaultIntEnv(os.Getenv("OATD_GATEWAY_MAX_IN_FLIGHT"), 64), "max in-flight gateway operations before backpressure")
@@ -62,7 +71,17 @@ func main() {
 	if value := strings.TrimSpace(*threatPackPath); value != "" {
 		runtimeConfig.ThreatPackPath = value
 	}
-	if err := server.ValidateListenAddress(*addr, len(runtimeConfig.Users) > 0 || strings.TrimSpace(*apiToken) != "", *insecure); err != nil {
+	authConfigured := len(runtimeConfig.Users) > 0 ||
+		strings.TrimSpace(*apiToken) != "" ||
+		strings.TrimSpace(*oidcIssuerURL) != "" ||
+		strings.TrimSpace(*oidcClientID) != "" ||
+		strings.TrimSpace(*oidcClientSecret) != "" ||
+		strings.TrimSpace(*oidcRedirectURL) != "" ||
+		strings.TrimSpace(*samlRootURL) != "" ||
+		strings.TrimSpace(*samlIDPMetadataURL) != "" ||
+		strings.TrimSpace(*samlKeyPath) != "" ||
+		strings.TrimSpace(*samlCertPath) != ""
+	if err := server.ValidateListenAddress(*addr, authConfigured, *insecure); err != nil {
 		log.Fatal(err)
 	}
 	window, err := runtimeConfig.CorrelationWindowDuration()
@@ -109,6 +128,15 @@ func main() {
 		OIDCTenantClaim:      *oidcTenantClaim,
 		OIDCRoleClaim:        *oidcRoleClaim,
 		OIDCEmailClaim:       *oidcEmailClaim,
+		SAMLRootURL:          *samlRootURL,
+		SAMLIDPMetadataURL:   *samlIDPMetadataURL,
+		SAMLKeyPath:          *samlKeyPath,
+		SAMLCertPath:         *samlCertPath,
+		SAMLTenantAttribute:  *samlTenantAttribute,
+		SAMLRoleAttribute:    *samlRoleAttribute,
+		SAMLEmailAttribute:   *samlEmailAttribute,
+		PublicURL:            *publicURL,
+		InstanceName:         *instanceName,
 		TrustedProxies:       splitCSV(*trustedProxies),
 		RetentionWindow:      retention,
 		GatewayMaxInFlight:   *gatewayMaxInFlight,

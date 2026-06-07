@@ -217,6 +217,15 @@ Useful endpoints:
 --oidc-tenant-claim    OIDC claim name for tenant assignment
 --oidc-role-claim      OIDC claim name for roles
 --oidc-email-claim     OIDC claim name for username/email
+--saml-root-url        SAML service provider root URL
+--saml-idp-metadata-url SAML identity provider metadata URL
+--saml-key-path        SAML signing key path
+--saml-cert-path       SAML signing certificate path
+--saml-tenant-attribute SAML attribute name for tenant assignment
+--saml-role-attribute  SAML attribute name for roles
+--saml-email-attribute SAML attribute name for username/email
+--public-url           canonical public URL for HA and SSO callbacks
+--instance-name        instance label for HA deployments
 ```
 
 When users are configured in the policy file, all API endpoints require
@@ -225,9 +234,14 @@ against RBAC roles. `--api-token` remains a legacy admin-token compatibility
 path.
 
 The dashboard uses `POST /api/session` to exchange a configured user name and
-token for a session cookie, or `GET /api/sso/oidc/login` plus the configured
-OIDC callback for SSO. `GET /api/session` reports the current dashboard state,
-includes SSO availability, and `DELETE /api/session` logs out.
+token for a session cookie, or `GET /api/sso/oidc/login` / `GET /api/sso/saml/login`
+for SSO. `GET /api/session` reports the current dashboard state, includes SSO
+availability, and `DELETE /api/session` logs out.
+
+For HA, run multiple replicas behind a load balancer with the same Postgres
+database, shared SAML signing material, and distinct `--instance-name` values.
+`--public-url` should match the canonical external URL used by SSO callbacks
+and health checks.
 
 ## Policy Configuration
 
