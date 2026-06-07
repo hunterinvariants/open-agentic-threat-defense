@@ -40,6 +40,14 @@ func main() {
 	githubWorkflowRef := flag.String("github-workflow-ref", os.Getenv("OATD_GITHUB_WORKFLOW_REF"), "GitHub ref for workflow dispatch")
 	mcpUpstreamURL := flag.String("mcp-upstream-url", os.Getenv("OATD_MCP_UPSTREAM_URL"), "upstream MCP server URL for transparent interception")
 	mcpUpstreamToken := flag.String("mcp-upstream-token", os.Getenv("OATD_MCP_UPSTREAM_TOKEN"), "optional bearer token for MCP upstream")
+	oidcIssuerURL := flag.String("oidc-issuer-url", os.Getenv("OATD_OIDC_ISSUER_URL"), "OIDC issuer URL for SSO login")
+	oidcClientID := flag.String("oidc-client-id", os.Getenv("OATD_OIDC_CLIENT_ID"), "OIDC client ID")
+	oidcClientSecret := flag.String("oidc-client-secret", os.Getenv("OATD_OIDC_CLIENT_SECRET"), "OIDC client secret")
+	oidcRedirectURL := flag.String("oidc-redirect-url", os.Getenv("OATD_OIDC_REDIRECT_URL"), "OIDC redirect URL")
+	oidcScopes := flag.String("oidc-scopes", defaultString(os.Getenv("OATD_OIDC_SCOPES"), "openid,profile,email"), "comma-separated OIDC scopes")
+	oidcTenantClaim := flag.String("oidc-tenant-claim", os.Getenv("OATD_OIDC_TENANT_CLAIM"), "OIDC claim name for tenant assignment")
+	oidcRoleClaim := flag.String("oidc-role-claim", os.Getenv("OATD_OIDC_ROLE_CLAIM"), "OIDC claim name for roles")
+	oidcEmailClaim := flag.String("oidc-email-claim", os.Getenv("OATD_OIDC_EMAIL_CLAIM"), "OIDC claim name for user name/email")
 	trustedProxies := flag.String("trusted-proxies", os.Getenv("OATD_TRUSTED_PROXIES"), "comma-separated list of trusted proxy CIDRs or IPs")
 	retentionWindow := flag.String("retention-window", defaultString(os.Getenv("OATD_RETENTION_WINDOW"), "30d"), "retention window for events, alerts, actions, and audits")
 	gatewayMaxInFlight := flag.Int("gateway-max-in-flight", defaultIntEnv(os.Getenv("OATD_GATEWAY_MAX_IN_FLIGHT"), 64), "max in-flight gateway operations before backpressure")
@@ -93,6 +101,14 @@ func main() {
 		GitHubWorkflowRef:    *githubWorkflowRef,
 		MCPUpstreamURL:       *mcpUpstreamURL,
 		MCPUpstreamToken:     *mcpUpstreamToken,
+		OIDCIssuerURL:        *oidcIssuerURL,
+		OIDCClientID:         *oidcClientID,
+		OIDCClientSecret:     *oidcClientSecret,
+		OIDCRedirectURL:      *oidcRedirectURL,
+		OIDCScopes:           splitCSV(*oidcScopes),
+		OIDCTenantClaim:      *oidcTenantClaim,
+		OIDCRoleClaim:        *oidcRoleClaim,
+		OIDCEmailClaim:       *oidcEmailClaim,
 		TrustedProxies:       splitCSV(*trustedProxies),
 		RetentionWindow:      retention,
 		GatewayMaxInFlight:   *gatewayMaxInFlight,

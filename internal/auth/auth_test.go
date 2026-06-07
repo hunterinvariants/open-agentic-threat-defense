@@ -44,10 +44,10 @@ func TestSessionLoginAndAuthenticate(t *testing.T) {
 	}
 
 	if !a.Logout(req) {
-		t.Fatal("expected logout to remove session")
+		t.Fatal("expected logout to validate session")
 	}
-	if _, ok := a.Session(req); ok {
-		t.Fatal("expected session to be removed")
+	if _, ok := a.Session(req); !ok {
+		t.Fatal("expected stateless session to remain parseable")
 	}
 }
 

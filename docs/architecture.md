@@ -142,7 +142,8 @@ reload.
 
 ### Authentication And RBAC
 
-API access supports user tokens with RBAC roles configured in the policy file.
+API access supports user tokens with RBAC roles configured in the policy file
+and optional OIDC SSO for dashboard sign-in.
 Token values are not stored in config; only SHA-256 token hashes are stored.
 The legacy `--api-token` path behaves as an admin token for compatibility.
 

@@ -1,11 +1,15 @@
 package auth
 
 import (
-	"crypto/rand"
+	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -42,11 +46,16 @@ type SessionInfo struct {
 type Authenticator struct {
 	users      []UserConfig
 	legacyHash string
-	sessionMu  sync.RWMutex
-	sessions   map[string]SessionInfo
 	sessionTTL time.Duration
+	sessionKey []byte
 	loginMu    sync.Mutex
 	logins     map[string]loginAttempt
+}
+
+type sessionPayload struct {
+	Principal Principal `json:"principal"`
+	ExpiresAt time.Time `json:"expires_at"`
+	IssuedAt  time.Time `json:"issued_at"`
 }
 
 type loginAttempt struct {
@@ -58,13 +67,13 @@ type loginAttempt struct {
 func New(users []UserConfig, legacyToken string) *Authenticator {
 	authenticator := &Authenticator{
 		users:      normalizeUsers(users),
-		sessions:   make(map[string]SessionInfo),
 		logins:     make(map[string]loginAttempt),
 		sessionTTL: 12 * time.Hour,
 	}
 	if legacyToken != "" {
 		authenticator.legacyHash = HashToken(legacyToken)
 	}
+	authenticator.sessionKey = deriveSessionKey(authenticator.users, authenticator.legacyHash, os.Getenv("OATD_SESSION_SECRET"))
 	return authenticator
 }
 
@@ -154,51 +163,55 @@ func (a *Authenticator) Login(username string, token string) (SessionInfo, strin
 	if !ok {
 		return SessionInfo{}, "", false
 	}
-	sessionID := randomSessionID()
-	if sessionID == "" {
-		return SessionInfo{}, "", false
+	return a.MintSession(principal)
+}
+
+func (a *Authenticator) MintSession(principal Principal) (SessionInfo, string, bool) {
+	principal.Tenant = strings.TrimSpace(principal.Tenant)
+	if principal.Tenant == "" {
+		principal.Tenant = "default"
+	}
+	principal.Roles = normalizeRoles(principal.Roles)
+	if len(principal.Roles) == 0 {
+		principal.Roles = []string{RoleViewer}
 	}
 	info := SessionInfo{
 		Principal: principal,
 		ExpiresAt: time.Now().UTC().Add(a.sessionTTL),
 	}
-	a.sessionMu.Lock()
-	a.sessions[sessionID] = info
-	a.sessionMu.Unlock()
+	sessionID, err := a.issueSession(info)
+	if err != nil {
+		return SessionInfo{}, "", false
+	}
 	return info, sessionID, true
 }
 
 func (a *Authenticator) Session(r *http.Request) (SessionInfo, bool) {
-	sessionID := readSessionID(r)
-	if sessionID == "" {
+	sessionToken := readSessionID(r)
+	if sessionToken == "" {
 		return SessionInfo{}, false
 	}
-	a.sessionMu.RLock()
-	info, ok := a.sessions[sessionID]
-	a.sessionMu.RUnlock()
+	info, ok := a.parseSession(sessionToken)
 	if !ok || time.Now().UTC().After(info.ExpiresAt) {
-		if ok {
-			a.sessionMu.Lock()
-			delete(a.sessions, sessionID)
-			a.sessionMu.Unlock()
-		}
 		return SessionInfo{}, false
 	}
 	return info, true
 }
 
 func (a *Authenticator) Logout(r *http.Request) bool {
-	sessionID := readSessionID(r)
-	if sessionID == "" {
+	sessionToken := readSessionID(r)
+	if sessionToken == "" {
 		return false
 	}
-	a.sessionMu.Lock()
-	defer a.sessionMu.Unlock()
-	if _, ok := a.sessions[sessionID]; !ok {
-		return false
+	_, ok := a.parseSession(sessionToken)
+	return ok
+}
+
+func (a *Authenticator) SessionKey() []byte {
+	if len(a.sessionKey) == 0 {
+		return nil
 	}
-	delete(a.sessions, sessionID)
-	return true
+	return append([]byte(nil), a.sessionKey...)
 }
 
 func (p Principal) HasAny(roles ...string) bool {
@@ -375,14 +388,6 @@ func (a *Authenticator) pruneLoginAttemptsLocked(now time.Time) {
 	}
 }
 
-func randomSessionID() string {
-	var raw [32]byte
-	if _, err := rand.Read(raw[:]); err != nil {
-		return ""
-	}
-	return hex.EncodeToString(raw[:])
-}
-
 const sessionCookieName = "oatd_session"
 
 func constantTimeEqual(got string, want string) bool {
@@ -390,4 +395,98 @@ func constantTimeEqual(got string, want string) bool {
 		return false
 	}
 	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
+}
+
+func deriveSessionKey(users []UserConfig, legacyHash string, explicitSecret string) []byte {
+	if value := strings.TrimSpace(explicitSecret); value != "" {
+		sum := sha256.Sum256([]byte(value))
+		return sum[:]
+	}
+	builder := strings.Builder{}
+	builder.WriteString(legacyHash)
+	for _, user := range users {
+		builder.WriteString("|")
+		builder.WriteString(user.Name)
+		builder.WriteString("|")
+		builder.WriteString(user.Tenant)
+		builder.WriteString("|")
+		builder.WriteString(strings.Join(user.Roles, ","))
+		builder.WriteString("|")
+		builder.WriteString(user.TokenHash)
+	}
+	sum := sha256.Sum256([]byte(builder.String()))
+	return sum[:]
+}
+
+func (a *Authenticator) issueSession(info SessionInfo) (string, error) {
+	if len(a.sessionKey) == 0 {
+		return "", errors.New("session key is not configured")
+	}
+	payload := sessionPayload{
+		Principal: info.Principal,
+		ExpiresAt: info.ExpiresAt.UTC(),
+		IssuedAt:  time.Now().UTC(),
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	session, err := signSession(a.sessionKey, data)
+	if err != nil {
+		return "", err
+	}
+	return session, nil
+}
+
+func (a *Authenticator) parseSession(token string) (SessionInfo, bool) {
+	if len(a.sessionKey) == 0 {
+		return SessionInfo{}, false
+	}
+	data, ok := verifySession(a.sessionKey, token)
+	if !ok {
+		return SessionInfo{}, false
+	}
+	var payload sessionPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return SessionInfo{}, false
+	}
+	if payload.Principal.Name == "" {
+		return SessionInfo{}, false
+	}
+	return SessionInfo{
+		Principal: payload.Principal,
+		ExpiresAt: payload.ExpiresAt,
+	}, true
+}
+
+func signSession(key []byte, payload []byte) (string, error) {
+	mac := hmac.New(sha256.New, key)
+	if _, err := mac.Write(payload); err != nil {
+		return "", err
+	}
+	sig := mac.Sum(nil)
+	return base64.RawURLEncoding.EncodeToString(payload) + "." + base64.RawURLEncoding.EncodeToString(sig), nil
+}
+
+func verifySession(key []byte, token string) ([]byte, bool) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 2 {
+		return nil, false
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return nil, false
+	}
+	expected, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil, false
+	}
+	mac := hmac.New(sha256.New, key)
+	if _, err := mac.Write(payload); err != nil {
+		return nil, false
+	}
+	if subtle.ConstantTimeCompare(mac.Sum(nil), expected) != 1 {
+		return nil, false
+	}
+	return payload, true
 }

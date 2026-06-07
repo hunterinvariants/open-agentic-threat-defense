@@ -6,6 +6,7 @@ const els = {
   loginToken: document.querySelector("#login-token"),
   loginError: document.querySelector("#login-error"),
   loginSubmit: document.querySelector("#login-submit"),
+  oidcLogin: document.querySelector("#oidc-login"),
   sessionLabel: document.querySelector("#session-label"),
   version: document.querySelector("#version"),
   loadDemo: document.querySelector("#load-demo"),
@@ -74,9 +75,11 @@ function isLoggedIn() {
 function setView(session) {
   state.session = session;
   const loggedIn = isLoggedIn();
+  const ssoEnabled = Boolean(session && session.sso && session.sso.oidc);
   document.body.classList.toggle("logged-out", !loggedIn);
   els.loginView.hidden = loggedIn;
   els.appView.hidden = !loggedIn;
+  els.oidcLogin.hidden = loggedIn || !ssoEnabled;
   if (loggedIn) {
     const principal = session.principal || {};
     const mode = session.mode || "session";
@@ -87,9 +90,9 @@ function setView(session) {
   }
 }
 
-function showLogin(message = "") {
+function showLogin(message = "", sso = { oidc: false }) {
   stopPolling();
-  setView({ authenticated: false });
+  setView({ authenticated: false, sso });
   els.loginError.textContent = message;
   els.loginSubmit.disabled = false;
   els.loginForm.reset();
@@ -119,7 +122,7 @@ function stopPolling() {
 function handleApiFailure(error) {
   if (error && error.status === 401) {
     sessionStorage.removeItem("oatd_api_token");
-    showLogin("Session expired.");
+    showLogin("Session expired.", state.session && state.session.sso ? state.session.sso : { oidc: false });
     return;
   }
   console.error(error);
@@ -131,7 +134,7 @@ async function loadSession() {
     showApp(session);
     return true;
   }
-  showLogin();
+  showLogin("", session && session.sso ? session.sso : { oidc: false });
   return false;
 }
 
@@ -383,7 +386,7 @@ async function logout() {
     handleApiFailure(error);
   }
   sessionStorage.removeItem("oatd_api_token");
-  showLogin();
+  showLogin("", state.session && state.session.sso ? state.session.sso : { oidc: false });
 }
 
 els.loginForm.addEventListener("submit", async (event) => {
@@ -402,6 +405,10 @@ els.loginForm.addEventListener("submit", async (event) => {
   } finally {
     els.loginSubmit.disabled = false;
   }
+});
+
+els.oidcLogin.addEventListener("click", () => {
+  window.location.assign("/api/sso/oidc/login");
 });
 
 els.logout.addEventListener("click", () => {

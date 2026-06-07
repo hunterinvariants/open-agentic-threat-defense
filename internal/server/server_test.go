@@ -750,8 +750,15 @@ func TestSessionLoginAndLogout(t *testing.T) {
 	statusReq.AddCookie(cookies[0])
 	statusRec = httptest.NewRecorder()
 	app.Routes().ServeHTTP(statusRec, statusReq)
+	if statusRec.Code != http.StatusOK {
+		t.Fatalf("expected stateless session to remain valid until cookie removal, got %d", statusRec.Code)
+	}
+
+	statusReq = httptest.NewRequest(http.MethodGet, "/api/status", nil)
+	statusRec = httptest.NewRecorder()
+	app.Routes().ServeHTTP(statusRec, statusReq)
 	if statusRec.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401 after logout, got %d", statusRec.Code)
+		t.Fatalf("expected 401 without cookie after logout, got %d", statusRec.Code)
 	}
 }
 
@@ -1074,5 +1081,47 @@ func TestAlertWebhookExportsNewAlerts(t *testing.T) {
 	}
 	if app.lastExportError() != "" {
 		t.Fatalf("unexpected export error: %s", app.lastExportError())
+	}
+}
+
+func TestTenantIsolationFiltersReadPaths(t *testing.T) {
+	app, err := NewWithOptions(Options{
+		Users: []auth.UserConfig{
+			{Name: "alice", Tenant: "tenant-a", TokenHash: auth.HashToken("alice-secret"), Roles: []string{auth.RoleIngestor, auth.RoleViewer}},
+			{Name: "bob", Tenant: "tenant-b", TokenHash: auth.HashToken("bob-secret"), Roles: []string{auth.RoleViewer}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/events", strings.NewReader(`{"kind":"finding","asset_id":"asset-a","hostname":"asset-a","signal":"tenant-a"}`))
+	req.Header.Set("Authorization", "Bearer alice-secret")
+	rec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected ingest 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	readReq := httptest.NewRequest(http.MethodGet, "/api/events", nil)
+	readReq.Header.Set("Authorization", "Bearer alice-secret")
+	readRec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(readRec, readReq)
+	if readRec.Code != http.StatusOK {
+		t.Fatalf("expected tenant-a read 200, got %d", readRec.Code)
+	}
+	if !strings.Contains(readRec.Body.String(), "asset-a") {
+		t.Fatalf("expected tenant-a event in response, got %s", readRec.Body.String())
+	}
+
+	otherReq := httptest.NewRequest(http.MethodGet, "/api/events", nil)
+	otherReq.Header.Set("Authorization", "Bearer bob-secret")
+	otherRec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(otherRec, otherReq)
+	if otherRec.Code != http.StatusOK {
+		t.Fatalf("expected tenant-b read 200, got %d", otherRec.Code)
+	}
+	if strings.Contains(otherRec.Body.String(), "asset-a") {
+		t.Fatalf("expected tenant-b isolation, got %s", otherRec.Body.String())
 	}
 }

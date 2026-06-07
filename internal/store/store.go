@@ -85,6 +85,10 @@ func (s *Store) ListEvents() []domain.Event {
 	return events
 }
 
+func (s *Store) ListEventsForTenant(tenant string) []domain.Event {
+	return filterEventsByTenant(s.ListEvents(), tenant)
+}
+
 func (s *Store) AddAlerts(alerts []domain.Alert) ([]domain.Alert, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -127,6 +131,10 @@ func (s *Store) ListAlerts() []domain.Alert {
 	return alerts
 }
 
+func (s *Store) ListAlertsForTenant(tenant string) []domain.Alert {
+	return filterAlertsByTenant(s.ListAlerts(), tenant)
+}
+
 func (s *Store) GetAlert(id string) (domain.Alert, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -137,6 +145,14 @@ func (s *Store) GetAlert(id string) (domain.Alert, bool) {
 		}
 	}
 	return domain.Alert{}, false
+}
+
+func (s *Store) GetAlertForTenant(id string, tenant string) (domain.Alert, bool) {
+	alert, ok := s.GetAlert(id)
+	if !ok || !sameTenant(alert.Tenant, tenant) {
+		return domain.Alert{}, false
+	}
+	return alert, true
 }
 
 func (s *Store) AddActions(actions []domain.ResponseAction) error {
@@ -155,6 +171,10 @@ func (s *Store) AddActions(actions []domain.ResponseAction) error {
 	return s.persistLocked()
 }
 
+func (s *Store) ListActionsForTenant(tenant string) []domain.ResponseAction {
+	return filterActionsByTenant(s.ListActions(), tenant)
+}
+
 func (s *Store) GetAction(id string) (domain.ResponseAction, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -165,6 +185,14 @@ func (s *Store) GetAction(id string) (domain.ResponseAction, bool) {
 		}
 	}
 	return domain.ResponseAction{}, false
+}
+
+func (s *Store) GetActionForTenant(id string, tenant string) (domain.ResponseAction, bool) {
+	action, ok := s.GetAction(id)
+	if !ok || !sameTenant(action.Tenant, tenant) {
+		return domain.ResponseAction{}, false
+	}
+	return action, true
 }
 
 func (s *Store) ListPendingGatewayActions() []domain.ResponseAction {
@@ -181,6 +209,10 @@ func (s *Store) ListPendingGatewayActions() []domain.ResponseAction {
 		return actions[i].CreatedAt.After(actions[j].CreatedAt)
 	})
 	return actions
+}
+
+func (s *Store) ListPendingGatewayActionsForTenant(tenant string) []domain.ResponseAction {
+	return filterActionsByTenant(s.ListPendingGatewayActions(), tenant)
 }
 
 func (s *Store) ApproveAction(id string, approvedBy string, approvedAt time.Time) (domain.ResponseAction, bool, error) {
@@ -273,6 +305,10 @@ func (s *Store) ListAudits() []domain.AuditEvent {
 	return audits
 }
 
+func (s *Store) ListAuditsForTenant(tenant string) []domain.AuditEvent {
+	return filterAuditsByTenant(s.ListAudits(), tenant)
+}
+
 func (s *Store) AuditChain() AuditChainSnapshot {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -296,11 +332,24 @@ func (s *Store) ListAssets() []domain.Asset {
 	return assets
 }
 
+func (s *Store) ListAssetsForTenant(tenant string) []domain.Asset {
+	return filterAssetsByTenant(s.ListAssets(), tenant)
+}
+
 func (s *Store) Counts() (events int, alerts int, assets int, actions int, audits int) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	return len(s.events), len(s.alerts), len(s.assets), len(s.actions), len(s.audits)
+}
+
+func (s *Store) CountsForTenant(tenant string) (events int, alerts int, assets int, actions int, audits int) {
+	events = len(filterEventsByTenant(s.ListEvents(), tenant))
+	alerts = len(filterAlertsByTenant(s.ListAlerts(), tenant))
+	assets = len(filterAssetsByTenant(s.ListAssets(), tenant))
+	actions = len(filterActionsByTenant(s.ListActions(), tenant))
+	audits = len(filterAuditsByTenant(s.ListAudits(), tenant))
+	return
 }
 
 func (s *Store) PersistencePath() string {

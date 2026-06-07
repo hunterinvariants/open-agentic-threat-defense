@@ -87,6 +87,49 @@ func (s *Store) auditChainSnapshotLocked() AuditChainSnapshot {
 	return snap
 }
 
+func (s *Store) AuditChainForTenant(tenant string) AuditChainSnapshot {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.auditChainSnapshotForTenantLocked(tenant)
+}
+
+func (s *Store) auditChainSnapshotForTenantLocked(tenant string) AuditChainSnapshot {
+	tenant = tenantOrDefault(tenant)
+	filtered := make([]domain.AuditEvent, 0, len(s.audits))
+	for _, audit := range s.audits {
+		if sameTenant(audit.Tenant, tenant) {
+			filtered = append(filtered, audit)
+		}
+	}
+	snap := AuditChainSnapshot{
+		Total:  len(filtered),
+		Linked: 0,
+		Head:   "",
+		Valid:  true,
+	}
+	previous := ""
+	for _, audit := range filtered {
+		if strings.TrimSpace(audit.Hash) == "" {
+			continue
+		}
+		snap.Linked++
+		if audit.PrevHash != previous {
+			snap.Valid = false
+		}
+		if audit.Hash != auditEventHash(audit, audit.PrevHash) {
+			snap.Valid = false
+		}
+		previous = audit.Hash
+		snap.Head = audit.Hash
+		snap.LastAuditID = audit.ID
+		snap.LastTimestamp = audit.Timestamp
+	}
+	if snap.Head == "" {
+		snap.Valid = true
+	}
+	return snap
+}
+
 func auditEventHash(event domain.AuditEvent, prevHash string) string {
 	builder := strings.Builder{}
 	builder.WriteString(prevHash)

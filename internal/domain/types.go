@@ -42,6 +42,7 @@ const (
 type Event struct {
 	ID          string            `json:"id"`
 	Timestamp   time.Time         `json:"timestamp"`
+	Tenant      string            `json:"tenant,omitempty"`
 	Kind        EventKind         `json:"kind"`
 	AssetID     string            `json:"asset_id"`
 	Hostname    string            `json:"hostname"`
@@ -116,6 +117,7 @@ type Alert struct {
 	Severity           Severity          `json:"severity"`
 	Status             AlertStatus       `json:"status"`
 	AssetID            string            `json:"asset_id"`
+	Tenant             string            `json:"tenant,omitempty"`
 	CreatedAt          time.Time         `json:"created_at"`
 	EventIDs           []string          `json:"event_ids"`
 	Evidence           map[string]string `json:"evidence"`
@@ -127,6 +129,7 @@ type ResponseAction struct {
 	Type            string            `json:"type"`
 	Mode            string            `json:"mode"`
 	AssetID         string            `json:"asset_id"`
+	Tenant          string            `json:"tenant,omitempty"`
 	Target          string            `json:"target"`
 	Reason          string            `json:"reason"`
 	CreatedAt       time.Time         `json:"created_at"`
@@ -141,6 +144,7 @@ type ResponseAction struct {
 
 type Asset struct {
 	ID           string            `json:"id"`
+	Tenant       string            `json:"tenant,omitempty"`
 	Hostname     string            `json:"hostname"`
 	OS           string            `json:"os"`
 	IPs          []string          `json:"ips"`
@@ -154,6 +158,7 @@ type Asset struct {
 type AuditEvent struct {
 	ID           string            `json:"id"`
 	Timestamp    time.Time         `json:"timestamp"`
+	Tenant       string            `json:"tenant,omitempty"`
 	ChainIndex   int               `json:"chain_index,omitempty"`
 	PrevHash     string            `json:"prev_hash,omitempty"`
 	Hash         string            `json:"hash,omitempty"`

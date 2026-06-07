@@ -209,6 +209,14 @@ Useful endpoints:
 --github-token         GitHub token for issue and workflow integrations
 --github-workflow-file GitHub workflow file for approved response actions
 --github-workflow-ref  GitHub ref for workflow dispatch
+--oidc-issuer-url      OIDC issuer URL for SSO login
+--oidc-client-id       OIDC client ID
+--oidc-client-secret   OIDC client secret
+--oidc-redirect-url    OIDC redirect URL
+--oidc-scopes          comma-separated OIDC scopes, default openid,profile,email
+--oidc-tenant-claim    OIDC claim name for tenant assignment
+--oidc-role-claim      OIDC claim name for roles
+--oidc-email-claim     OIDC claim name for username/email
 ```
 
 When users are configured in the policy file, all API endpoints require
@@ -217,8 +225,9 @@ against RBAC roles. `--api-token` remains a legacy admin-token compatibility
 path.
 
 The dashboard uses `POST /api/session` to exchange a configured user name and
-token for a session cookie. `GET /api/session` reports the current dashboard
-state and `DELETE /api/session` logs out.
+token for a session cookie, or `GET /api/sso/oidc/login` plus the configured
+OIDC callback for SSO. `GET /api/session` reports the current dashboard state,
+includes SSO availability, and `DELETE /api/session` logs out.
 
 ## Policy Configuration
 

@@ -46,6 +46,7 @@ type App struct {
 	github           exporter.GitHub
 	mcpUpstreamURL   string
 	mcpUpstreamToken string
+	oidc             *oidcProvider
 	exportMu         sync.RWMutex
 	exportErr        string
 	startedAt        time.Time
@@ -75,6 +76,14 @@ type Options struct {
 	GitHubWorkflowRef    string
 	MCPUpstreamURL       string
 	MCPUpstreamToken     string
+	OIDCIssuerURL        string
+	OIDCClientID         string
+	OIDCClientSecret     string
+	OIDCRedirectURL      string
+	OIDCScopes           []string
+	OIDCTenantClaim      string
+	OIDCRoleClaim        string
+	OIDCEmailClaim       string
 	TrustedProxies       []string
 	RetentionWindow      time.Duration
 	GatewayMaxInFlight   int
@@ -119,13 +128,18 @@ func NewWithOptions(options Options) (*App, error) {
 	if gatewayLimit <= 0 {
 		gatewayLimit = 64
 	}
+	authenticator := auth.New(options.Users, options.APIToken)
+	oidcProvider, err := newOIDCProvider(options.OIDCIssuerURL, options.OIDCClientID, options.OIDCClientSecret, options.OIDCRedirectURL, options.OIDCScopes, options.OIDCTenantClaim, options.OIDCRoleClaim, options.OIDCEmailClaim, authenticator.SessionKey())
+	if err != nil {
+		return nil, err
+	}
 	return &App{
 		store:          st,
 		policy:         policy.New(options.Policy),
 		correlator:     correlator.New(options.CorrelationWindow),
 		responder:      response.NewDryRun(),
 		webDir:         options.WebDir,
-		auth:           auth.New(options.Users, options.APIToken),
+		auth:           authenticator,
 		trustedProxies: trustedProxies,
 		gatewayLimiter: make(chan struct{}, gatewayLimit),
 		webhook: exporter.Webhook{
@@ -150,6 +164,7 @@ func NewWithOptions(options Options) (*App, error) {
 		},
 		mcpUpstreamURL:   options.MCPUpstreamURL,
 		mcpUpstreamToken: options.MCPUpstreamToken,
+		oidc:             oidcProvider,
 		startedAt:        time.Now().UTC(),
 	}, nil
 }
@@ -160,6 +175,8 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("/readyz", a.handleReady)
 	mux.HandleFunc("/api/status", a.handleStatus)
 	mux.HandleFunc("/api/session", a.handleSession)
+	mux.HandleFunc("/api/sso/oidc/login", a.handleOIDCLogin)
+	mux.HandleFunc("/api/sso/oidc/callback", a.handleOIDCCallback)
 	mux.HandleFunc("/api/gateway/decide", a.handleGatewayDecision)
 	mux.HandleFunc("/api/gateway/execute", a.handleGatewayExecute)
 	mux.HandleFunc("/api/gateway/queue", a.handleGatewayQueue)
@@ -180,11 +197,15 @@ func (a *App) Routes() http.Handler {
 }
 
 func (a *App) LoadDemo() ([]domain.Alert, error) {
+	return a.LoadDemoForTenant("default")
+}
+
+func (a *App) LoadDemoForTenant(tenant string) ([]domain.Alert, error) {
 	events := DemoEvents(time.Now().UTC())
 	for i := range events {
 		events[i].ID = ""
 	}
-	return a.ingest(events)
+	return a.ingest(events, tenant)
 }
 
 func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -192,8 +213,8 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-
-	events, alerts, assets, actions, audits := a.store.Counts()
+	tenant := tenantForPrincipal(principalFromRequest(r))
+	events, alerts, assets, actions, audits := a.store.CountsForTenant(tenant)
 	writeJSON(w, http.StatusOK, domain.Status{
 		Version:          Version,
 		UptimeSeconds:    int64(time.Since(a.startedAt).Seconds()),
@@ -251,6 +272,9 @@ func (a *App) handleSession(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]any{
 				"authenticated": true,
 				"mode":          "open",
+				"sso": map[string]any{
+					"oidc": false,
+				},
 				"principal": auth.Principal{
 					Name:   "anonymous",
 					Tenant: "default",
@@ -263,8 +287,12 @@ func (a *App) handleSession(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]any{
 				"authenticated": true,
 				"mode":          "session",
-				"principal":     info.Principal,
-				"expires_at":    info.ExpiresAt,
+				"sso": map[string]any{
+					"oidc":      a.oidc != nil && a.oidc.Enabled(),
+					"login_url": "/api/sso/oidc/login",
+				},
+				"principal":  info.Principal,
+				"expires_at": info.ExpiresAt,
 			})
 			return
 		}
@@ -272,12 +300,20 @@ func (a *App) handleSession(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]any{
 				"authenticated": true,
 				"mode":          "token",
-				"principal":     principal,
+				"sso": map[string]any{
+					"oidc":      a.oidc != nil && a.oidc.Enabled(),
+					"login_url": "/api/sso/oidc/login",
+				},
+				"principal": principal,
 			})
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"authenticated": false,
+			"sso": map[string]any{
+				"oidc":      a.oidc != nil && a.oidc.Enabled(),
+				"login_url": "/api/sso/oidc/login",
+			},
 		})
 	case http.MethodPost:
 		if a.auth == nil || !a.auth.Enabled() {
@@ -357,17 +393,92 @@ func (a *App) handleSession(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (a *App) handleOIDCLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	if a.oidc == nil || !a.oidc.Enabled() {
+		writeError(w, http.StatusNotFound, errors.New("oidc sso is not configured"))
+		return
+	}
+	loginURL, stateToken, err := a.oidc.BeginLogin(r)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     oidcStateCookieName,
+		Value:    stateToken,
+		Path:     "/api/sso/oidc",
+		Expires:  time.Now().UTC().Add(oidcStateTTL),
+		HttpOnly: true,
+		Secure:   r.TLS != nil,
+		SameSite: http.SameSiteLaxMode,
+	})
+	http.Redirect(w, r, loginURL, http.StatusFound)
+}
+
+func (a *App) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	if a.oidc == nil || !a.oidc.Enabled() {
+		writeError(w, http.StatusNotFound, errors.New("oidc sso is not configured"))
+		return
+	}
+	principal, returnTo, err := a.oidc.HandleCallback(r.Context(), r)
+	if err != nil {
+		a.auth.ClearSessionCookie(w)
+		http.SetCookie(w, &http.Cookie{
+			Name:     oidcStateCookieName,
+			Value:    "",
+			Path:     "/api/sso/oidc",
+			Expires:  time.Unix(0, 0),
+			MaxAge:   -1,
+			HttpOnly: true,
+			SameSite: http.SameSiteLaxMode,
+		})
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	info, sessionID, ok := a.auth.MintSession(principal)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, errors.New("unable to mint session"))
+		return
+	}
+	a.auth.SetSessionCookie(w, sessionID, info.ExpiresAt, r.TLS != nil)
+	http.SetCookie(w, &http.Cookie{
+		Name:     oidcStateCookieName,
+		Value:    "",
+		Path:     "/api/sso/oidc",
+		Expires:  time.Unix(0, 0),
+		MaxAge:   -1,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
+	a.recordAudit(r, principal, "auth.login", "session", "", "accepted", map[string]string{
+		"mode": "oidc",
+	})
+	if returnTo == "" {
+		returnTo = "/"
+	}
+	http.Redirect(w, r, returnTo, http.StatusFound)
+}
+
 func (a *App) handleEvents(w http.ResponseWriter, r *http.Request) {
+	tenant := tenantForPrincipal(principalFromRequest(r))
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, a.store.ListEvents())
+		writeJSON(w, http.StatusOK, a.store.ListEventsForTenant(tenant))
 	case http.MethodPost:
 		events, err := decodeEvents(r)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		alerts, err := a.ingest(events)
+		alerts, err := a.ingest(events, tenant)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
@@ -406,7 +517,9 @@ func (a *App) handleGatewayDecision(w http.ResponseWriter, r *http.Request) {
 	a.prepareToolCallRequest(&req)
 
 	decision := a.policy.GateToolCall(req)
-	a.prepareAlerts(decision.Alerts)
+	principal := principalFromRequest(r)
+	tenant := tenantForPrincipal(principal)
+	a.prepareAlerts(decision.Alerts, tenant)
 	added, err := a.store.AddAlerts(decision.Alerts)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
@@ -417,19 +530,18 @@ func (a *App) handleGatewayDecision(w http.ResponseWriter, r *http.Request) {
 	}
 	decision.Alerts = added
 	decision.RecommendedActions = a.recommendedActionsForAlerts(added)
-	principal := principalFromRequest(r)
 	switch decision.Verdict {
 	case domain.GatewayRequireApproval:
-		action := a.gatewayActionFromDecision(req, decision, "required", "")
-		a.prepareAction(&action)
+		action := a.gatewayActionFromDecision(req, decision, tenant, "required", "")
+		a.prepareAction(&action, tenant)
 		if err := a.store.AddActions([]domain.ResponseAction{action}); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
 		decision.Action = &action
 	case domain.GatewayDeny:
-		action := a.gatewayActionFromDecision(req, decision, "not_required", "blocked")
-		a.prepareAction(&action)
+		action := a.gatewayActionFromDecision(req, decision, tenant, "not_required", "blocked")
+		a.prepareAction(&action, tenant)
 		if err := a.store.AddActions([]domain.ResponseAction{action}); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
@@ -469,7 +581,9 @@ func (a *App) handleGatewayExecute(w http.ResponseWriter, r *http.Request) {
 	a.prepareToolCallRequest(&req)
 
 	decision := a.policy.GateToolCall(req)
-	a.prepareAlerts(decision.Alerts)
+	principal := principalFromRequest(r)
+	tenant := tenantForPrincipal(principal)
+	a.prepareAlerts(decision.Alerts, tenant)
 	added, err := a.store.AddAlerts(decision.Alerts)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
@@ -481,15 +595,14 @@ func (a *App) handleGatewayExecute(w http.ResponseWriter, r *http.Request) {
 	decision.Alerts = added
 	decision.RecommendedActions = a.recommendedActionsForAlerts(added)
 
-	principal := principalFromRequest(r)
 	response := domain.ToolExecutionResult{
 		Decision: decision,
 	}
 
 	switch decision.Verdict {
 	case domain.GatewayAllow:
-		action := a.gatewayActionFromDecision(req, decision, "not_required", "executed")
-		a.prepareAction(&action)
+		action := a.gatewayActionFromDecision(req, decision, tenant, "not_required", "executed")
+		a.prepareAction(&action, tenant)
 		executed, result, execErr := a.executeGatewayToolAction(r, principal, action, "executed")
 		if execErr != nil {
 			writeError(w, http.StatusInternalServerError, execErr)
@@ -510,8 +623,8 @@ func (a *App) handleGatewayExecute(w http.ResponseWriter, r *http.Request) {
 		})
 		writeJSON(w, http.StatusOK, response)
 	case domain.GatewayRequireApproval:
-		action := a.gatewayActionFromDecision(req, decision, "required", "")
-		a.prepareAction(&action)
+		action := a.gatewayActionFromDecision(req, decision, tenant, "required", "")
+		a.prepareAction(&action, tenant)
 		if err := a.store.AddActions([]domain.ResponseAction{action}); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
@@ -530,8 +643,8 @@ func (a *App) handleGatewayExecute(w http.ResponseWriter, r *http.Request) {
 		})
 		writeJSON(w, http.StatusAccepted, response)
 	case domain.GatewayDeny:
-		action := a.gatewayActionFromDecision(req, decision, "not_required", "blocked")
-		a.prepareAction(&action)
+		action := a.gatewayActionFromDecision(req, decision, tenant, "not_required", "blocked")
+		a.prepareAction(&action, tenant)
 		if err := a.store.AddActions([]domain.ResponseAction{action}); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
@@ -593,7 +706,9 @@ func (a *App) handleGatewayProxy(w http.ResponseWriter, r *http.Request) {
 	a.prepareToolCallRequest(&req.ToolCall)
 
 	decision := a.policy.GateToolCall(req.ToolCall)
-	a.prepareAlerts(decision.Alerts)
+	principal := principalFromRequest(r)
+	tenant := tenantForPrincipal(principal)
+	a.prepareAlerts(decision.Alerts, tenant)
 	added, err := a.store.AddAlerts(decision.Alerts)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
@@ -601,7 +716,6 @@ func (a *App) handleGatewayProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	decision.Alerts = added
 	decision.RecommendedActions = a.recommendedActionsForAlerts(added)
-	principal := principalFromRequest(r)
 
 	switch decision.Verdict {
 	case domain.GatewayAllow:
@@ -642,12 +756,12 @@ func (a *App) handleGatewayProxy(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadGateway, err)
 			return
 		}
-		action := a.gatewayActionFromDecision(req.ToolCall, decision, "not_required", "executed")
+		action := a.gatewayActionFromDecision(req.ToolCall, decision, tenant, "not_required", "executed")
 		action.Type = "gateway_proxy"
 		action.Metadata["proxy_upstream_url"] = req.UpstreamURL
 		action.Metadata["proxy_upstream_status"] = fmt.Sprintf("%d", upstreamResp.StatusCode)
 		action.Metadata["proxy_content_type"] = upstreamResp.Header.Get("Content-Type")
-		a.prepareAction(&action)
+		a.prepareAction(&action, tenant)
 		if err := a.store.AddActions([]domain.ResponseAction{action}); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
@@ -669,10 +783,10 @@ func (a *App) handleGatewayProxy(w http.ResponseWriter, r *http.Request) {
 			"action":          action,
 		})
 	case domain.GatewayRequireApproval:
-		action := a.gatewayActionFromDecision(req.ToolCall, decision, "required", "")
+		action := a.gatewayActionFromDecision(req.ToolCall, decision, tenant, "required", "")
 		action.Type = "gateway_proxy"
 		action.Metadata["proxy_upstream_url"] = req.UpstreamURL
-		a.prepareAction(&action)
+		a.prepareAction(&action, tenant)
 		if err := a.store.AddActions([]domain.ResponseAction{action}); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
@@ -692,10 +806,10 @@ func (a *App) handleGatewayProxy(w http.ResponseWriter, r *http.Request) {
 			"action":   action,
 		})
 	case domain.GatewayDeny:
-		action := a.gatewayActionFromDecision(req.ToolCall, decision, "not_required", "blocked")
+		action := a.gatewayActionFromDecision(req.ToolCall, decision, tenant, "not_required", "blocked")
 		action.Type = "gateway_proxy"
 		action.Metadata["proxy_upstream_url"] = req.UpstreamURL
-		a.prepareAction(&action)
+		a.prepareAction(&action, tenant)
 		if err := a.store.AddActions([]domain.ResponseAction{action}); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
@@ -724,8 +838,9 @@ func (a *App) handleGatewayQueue(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
+	tenant := tenantForPrincipal(principalFromRequest(r))
 	writeJSON(w, http.StatusOK, map[string]any{
-		"pending_actions": a.store.ListPendingGatewayActions(),
+		"pending_actions": a.store.ListPendingGatewayActionsForTenant(tenant),
 	})
 }
 
@@ -740,7 +855,8 @@ func (a *App) handleGatewayAction(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("action id is required"))
 		return
 	}
-	action, ok := a.store.GetAction(id)
+	tenant := tenantForPrincipal(principalFromRequest(r))
+	action, ok := a.store.GetActionForTenant(id, tenant)
 	if !ok {
 		writeError(w, http.StatusNotFound, errors.New("action not found"))
 		return
@@ -753,7 +869,7 @@ func (a *App) handleAlerts(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-	writeJSON(w, http.StatusOK, a.store.ListAlerts())
+	writeJSON(w, http.StatusOK, a.store.ListAlertsForTenant(tenantForPrincipal(principalFromRequest(r))))
 }
 
 func (a *App) handleAssets(w http.ResponseWriter, r *http.Request) {
@@ -761,7 +877,7 @@ func (a *App) handleAssets(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-	writeJSON(w, http.StatusOK, a.store.ListAssets())
+	writeJSON(w, http.StatusOK, a.store.ListAssetsForTenant(tenantForPrincipal(principalFromRequest(r))))
 }
 
 func (a *App) handleAudit(w http.ResponseWriter, r *http.Request) {
@@ -769,7 +885,7 @@ func (a *App) handleAudit(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-	writeJSON(w, http.StatusOK, a.store.ListAudits())
+	writeJSON(w, http.StatusOK, a.store.ListAuditsForTenant(tenantForPrincipal(principalFromRequest(r))))
 }
 
 func (a *App) handleAuditChain(w http.ResponseWriter, r *http.Request) {
@@ -777,7 +893,7 @@ func (a *App) handleAuditChain(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-	writeJSON(w, http.StatusOK, a.store.AuditChain())
+	writeJSON(w, http.StatusOK, a.store.AuditChainForTenant(tenantForPrincipal(principalFromRequest(r))))
 }
 
 func (a *App) handlePolicies(w http.ResponseWriter, r *http.Request) {
@@ -828,6 +944,11 @@ func (a *App) handleResponseApproval(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, errors.New("action not found"))
 		return
 	}
+	tenant := tenantForPrincipal(principalFromRequest(r))
+	if !sameTenant(action.Tenant, tenant) {
+		writeError(w, http.StatusNotFound, errors.New("action not found"))
+		return
+	}
 	principal := principalFromRequest(r)
 	if principal.Name == "" {
 		principal.Name = req.ApprovedBy
@@ -856,9 +977,10 @@ func (a *App) handleResponseApproval(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) handleResponses(w http.ResponseWriter, r *http.Request) {
+	tenant := tenantForPrincipal(principalFromRequest(r))
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, a.store.ListActions())
+		writeJSON(w, http.StatusOK, a.store.ListActionsForTenant(tenant))
 	case http.MethodPost:
 		var req struct {
 			AlertID string `json:"alert_id"`
@@ -871,14 +993,14 @@ func (a *App) handleResponses(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, errors.New("alert_id is required"))
 			return
 		}
-		alert, ok := a.store.GetAlert(req.AlertID)
+		alert, ok := a.store.GetAlertForTenant(req.AlertID, tenant)
 		if !ok {
 			writeError(w, http.StatusNotFound, errors.New("alert not found"))
 			return
 		}
 		actions := a.responder.Plan(alert)
 		for i := range actions {
-			a.prepareAction(&actions[i])
+			a.prepareAction(&actions[i], tenant)
 		}
 		if err := a.store.AddActions(actions); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
@@ -909,7 +1031,7 @@ func (a *App) handleDemo(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-	alerts, err := a.LoadDemo()
+	alerts, err := a.LoadDemoForTenant(tenantForPrincipal(principalFromRequest(r)))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -1086,18 +1208,19 @@ func (a *App) runGatewayStubTool(action domain.ResponseAction) (string, error) {
 	}
 }
 
-func (a *App) ingest(events []domain.Event) ([]domain.Alert, error) {
+func (a *App) ingest(events []domain.Event, tenant string) ([]domain.Alert, error) {
+	tenant = tenantOrDefault(tenant)
 	alerts := []domain.Alert{}
 	for i := range events {
-		a.prepareEvent(&events[i])
+		a.prepareEvent(&events[i], tenant)
 		if err := a.store.AddEvent(events[i]); err != nil {
 			return nil, err
 		}
 		alerts = append(alerts, a.policy.Evaluate(events[i])...)
 	}
 
-	alerts = append(alerts, a.correlator.Evaluate(a.store.ListEvents())...)
-	a.prepareAlerts(alerts)
+	alerts = append(alerts, a.correlator.Evaluate(a.store.ListEventsForTenant(tenant))...)
+	a.prepareAlerts(alerts, tenant)
 	added, err := a.store.AddAlerts(alerts)
 	if err != nil {
 		return nil, err
@@ -1106,7 +1229,8 @@ func (a *App) ingest(events []domain.Event) ([]domain.Alert, error) {
 	return added, nil
 }
 
-func (a *App) prepareEvent(event *domain.Event) {
+func (a *App) prepareEvent(event *domain.Event, tenant string) {
+	event.Tenant = tenantOrDefault(tenant)
 	if event.ID == "" {
 		event.ID = a.nextID("evt")
 	}
@@ -1118,9 +1242,11 @@ func (a *App) prepareEvent(event *domain.Event) {
 	}
 }
 
-func (a *App) prepareAlerts(alerts []domain.Alert) {
+func (a *App) prepareAlerts(alerts []domain.Alert, tenant string) {
+	tenant = tenantOrDefault(tenant)
 	now := time.Now().UTC()
 	for i := range alerts {
+		alerts[i].Tenant = tenant
 		if alerts[i].ID == "" {
 			alerts[i].ID = a.nextID("alrt")
 		}
@@ -1134,7 +1260,8 @@ func (a *App) prepareAlerts(alerts []domain.Alert) {
 	}
 }
 
-func (a *App) prepareAction(action *domain.ResponseAction) {
+func (a *App) prepareAction(action *domain.ResponseAction, tenant string) {
+	action.Tenant = tenantOrDefault(tenant)
 	if action.ID == "" {
 		action.ID = a.nextID("act")
 	}
@@ -1146,11 +1273,12 @@ func (a *App) prepareAction(action *domain.ResponseAction) {
 	}
 }
 
-func (a *App) gatewayActionFromDecision(request domain.ToolCallRequest, decision domain.ToolCallDecision, approvalStatus string, executionStatus string) domain.ResponseAction {
+func (a *App) gatewayActionFromDecision(request domain.ToolCallRequest, decision domain.ToolCallDecision, tenant string, approvalStatus string, executionStatus string) domain.ResponseAction {
 	action := domain.ResponseAction{
 		Type:            "gateway_tool_call",
 		Mode:            "inline",
 		AssetID:         request.AssetID,
+		Tenant:          tenantOrDefault(tenant),
 		Target:          request.ToolName,
 		Reason:          decision.Reason,
 		ApprovalStatus:  approvalStatus,
@@ -1161,6 +1289,7 @@ func (a *App) gatewayActionFromDecision(request domain.ToolCallRequest, decision
 		action.Metadata = make(map[string]string)
 	}
 	mergeStringMaps(action.Metadata, decision.Metadata)
+	action.Metadata["tenant"] = tenantOrDefault(tenant)
 	action.Metadata["request_id"] = request.ID
 	action.Metadata["tool"] = strings.TrimSpace(strings.ToLower(request.ToolName))
 	action.Metadata["actor"] = request.Actor
@@ -1315,12 +1444,14 @@ func (a *App) recordAudit(r *http.Request, principal auth.Principal, action stri
 	if principal.Name == "" {
 		principal.Name = "anonymous"
 	}
+	principal.Tenant = tenantOrDefault(principal.Tenant)
 	if principal.Tenant != "" {
 		metadata["tenant"] = principal.Tenant
 	}
 	event := domain.AuditEvent{
 		ID:           a.nextID("aud"),
 		Timestamp:    time.Now().UTC(),
+		Tenant:       principal.Tenant,
 		Actor:        principal.Name,
 		Roles:        append([]string(nil), principal.Roles...),
 		Action:       action,
@@ -1462,6 +1593,22 @@ func principalFromRequest(r *http.Request) auth.Principal {
 		return auth.Principal{}
 	}
 	return principal
+}
+
+func tenantForPrincipal(principal auth.Principal) string {
+	return tenantOrDefault(principal.Tenant)
+}
+
+func tenantOrDefault(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "default"
+	}
+	return value
+}
+
+func sameTenant(left string, right string) bool {
+	return tenantOrDefault(left) == tenantOrDefault(right)
 }
 
 func (a *App) sourceIP(r *http.Request) string {

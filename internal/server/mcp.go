@@ -71,7 +71,9 @@ func (a *App) handleMCPProxy(w http.ResponseWriter, r *http.Request) {
 	if shouldInterceptMCPMethod(rpc.Method) {
 		toolCall := a.toolCallFromMCPRequest(rpc)
 		decision := a.policy.GateToolCall(toolCall)
-		a.prepareAlerts(decision.Alerts)
+		principal := principalFromRequest(r)
+		tenant := tenantForPrincipal(principal)
+		a.prepareAlerts(decision.Alerts, tenant)
 		added, err := a.store.AddAlerts(decision.Alerts)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
@@ -79,7 +81,6 @@ func (a *App) handleMCPProxy(w http.ResponseWriter, r *http.Request) {
 		}
 		decision.Alerts = added
 		decision.RecommendedActions = a.recommendedActionsForAlerts(added)
-		principal := principalFromRequest(r)
 
 		switch decision.Verdict {
 		case domain.GatewayAllow:
@@ -88,11 +89,11 @@ func (a *App) handleMCPProxy(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusBadGateway, err)
 				return
 			}
-			action := a.gatewayActionFromDecision(toolCall, decision, "not_required", "executed")
+			action := a.gatewayActionFromDecision(toolCall, decision, tenant, "not_required", "executed")
 			action.Type = "mcp_proxy"
 			action.Metadata["mcp_method"] = rpc.Method
 			action.Metadata["mcp_upstream_url"] = a.gatewayMCPUpstream()
-			a.prepareAction(&action)
+			a.prepareAction(&action, tenant)
 			if err := a.store.AddActions([]domain.ResponseAction{action}); err != nil {
 				writeError(w, http.StatusInternalServerError, err)
 				return
@@ -109,11 +110,11 @@ func (a *App) handleMCPProxy(w http.ResponseWriter, r *http.Request) {
 			writeMCPResponse(w, status, resp)
 			return
 		case domain.GatewayRequireApproval:
-			action := a.gatewayActionFromDecision(toolCall, decision, "required", "")
+			action := a.gatewayActionFromDecision(toolCall, decision, tenant, "required", "")
 			action.Type = "mcp_proxy"
 			action.Metadata["mcp_method"] = rpc.Method
 			action.Metadata["mcp_upstream_url"] = a.gatewayMCPUpstream()
-			a.prepareAction(&action)
+			a.prepareAction(&action, tenant)
 			if err := a.store.AddActions([]domain.ResponseAction{action}); err != nil {
 				writeError(w, http.StatusInternalServerError, err)
 				return
@@ -141,11 +142,11 @@ func (a *App) handleMCPProxy(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		case domain.GatewayDeny:
-			action := a.gatewayActionFromDecision(toolCall, decision, "not_required", "blocked")
+			action := a.gatewayActionFromDecision(toolCall, decision, tenant, "not_required", "blocked")
 			action.Type = "mcp_proxy"
 			action.Metadata["mcp_method"] = rpc.Method
 			action.Metadata["mcp_upstream_url"] = a.gatewayMCPUpstream()
-			a.prepareAction(&action)
+			a.prepareAction(&action, tenant)
 			if err := a.store.AddActions([]domain.ResponseAction{action}); err != nil {
 				writeError(w, http.StatusInternalServerError, err)
 				return
