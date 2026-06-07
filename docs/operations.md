@@ -296,8 +296,8 @@ Generate a hash:
 The dashboard uses a session cookie instead of storing bearer tokens in the
 browser. It also supports OIDC SSO when `OATD_OIDC_ISSUER_URL`,
 `OATD_OIDC_CLIENT_ID`, and `OATD_OIDC_REDIRECT_URL` are configured, plus SAML
-SSO when `OATD_SAML_ROOT_URL`, `OATD_SAML_IDP_METADATA_URL`, and a signing
-key/certificate are configured.
+SSO when `OATD_SAML_ROOT_URL`, `OATD_SAML_IDP_METADATA_URL`, and explicit
+signing key/certificate paths are configured.
 
 Login:
 
@@ -346,5 +346,5 @@ curl -fsS http://blue-host/readyz
 curl -fsS http://green-host/readyz
 ```
 
-Use the reverse proxy example in `packaging/nginx/oadtd.conf` to place a load
-balancer in front of multiple instances.
+Use the reverse proxy example in `packaging/nginx/oadtd.conf` to place a TLS
+terminating load balancer in front of multiple instances.

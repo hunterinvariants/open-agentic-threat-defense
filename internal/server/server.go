@@ -411,7 +411,12 @@ func (a *App) handleSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		loginKey := a.sourceIP(r)
-		if wait := a.auth.LoginRetryAfter(loginKey); wait > 0 {
+		wait, err := a.loginRetryAfter(loginKey)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if wait > 0 {
 			w.Header().Set("Retry-After", fmt.Sprintf("%.0f", wait.Seconds()))
 			a.recordAudit(r, auth.Principal{Name: "anonymous"}, "auth.login", "session", "", "rate_limited", map[string]string{
 				"username":    strings.TrimSpace(req.Username),
@@ -422,7 +427,11 @@ func (a *App) handleSession(w http.ResponseWriter, r *http.Request) {
 		}
 		info, sessionID, ok := a.auth.Login(req.Username, req.Token)
 		if !ok {
-			wait := a.auth.RecordLoginAttempt(loginKey, false)
+			wait, err := a.recordLoginAttempt(loginKey, false)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err)
+				return
+			}
 			a.recordAudit(r, auth.Principal{Name: "anonymous"}, "auth.login", "session", "", "denied", map[string]string{
 				"username":    strings.TrimSpace(req.Username),
 				"retry_after": fmt.Sprintf("%.0f", wait.Seconds()),
@@ -430,7 +439,10 @@ func (a *App) handleSession(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusUnauthorized, errors.New("invalid credentials"))
 			return
 		}
-		a.auth.RecordLoginAttempt(loginKey, true)
+		if _, err := a.recordLoginAttempt(loginKey, true); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
 		a.auth.SetSessionCookie(w, sessionID, info.ExpiresAt, a.requestIsSecure(r))
 		a.recordAudit(r, info.Principal, "auth.login", "session", "", "accepted", map[string]string{
 			"mode": "session",
@@ -517,6 +529,11 @@ func (a *App) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
+	if !a.tenantAllowedForIdentity(principal.Tenant) {
+		a.auth.ClearSessionCookie(w)
+		writeError(w, http.StatusUnauthorized, errors.New("tenant is not allowed"))
+		return
+	}
 	info, sessionID, ok := a.auth.MintSession(principal)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, errors.New("unable to mint session"))
@@ -583,6 +600,10 @@ func (a *App) handleSAMLComplete(w http.ResponseWriter, r *http.Request) {
 	principal, err := a.saml.principalFromAttributes(attributes.GetAttributes())
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	if !a.tenantAllowedForIdentity(principal.Tenant) {
+		writeError(w, http.StatusUnauthorized, errors.New("tenant is not allowed"))
 		return
 	}
 	info, sessionID, ok := a.auth.MintSession(principal)
@@ -861,7 +882,7 @@ func (a *App) handleGatewayProxy(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		upstreamReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, parsedUpstream.String(), bytes.NewReader(payload))
+		upstreamReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, parsedUpstream.URL.String(), bytes.NewReader(payload))
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
@@ -875,16 +896,20 @@ func (a *App) handleGatewayProxy(w http.ResponseWriter, r *http.Request) {
 		upstreamReq.Header.Set("X-OATD-Decision", string(decision.Verdict))
 		upstreamReq.Header.Set("X-OATD-Tool", decision.ToolName)
 		upstreamReq.Header.Set("X-OATD-Request-ID", decision.RequestID)
-		client := &http.Client{Timeout: 15 * time.Second}
+		client := validatedHTTPClient(parsedUpstream)
 		upstreamResp, err := client.Do(upstreamReq)
 		if err != nil {
 			writeError(w, http.StatusBadGateway, err)
 			return
 		}
 		defer upstreamResp.Body.Close()
-		body, err := io.ReadAll(upstreamResp.Body)
+		body, err := io.ReadAll(io.LimitReader(upstreamResp.Body, mcpUpstreamResponseLimit+1))
 		if err != nil {
 			writeError(w, http.StatusBadGateway, err)
+			return
+		}
+		if len(body) > mcpUpstreamResponseLimit {
+			writeError(w, http.StatusBadGateway, errors.New("upstream response too large"))
 			return
 		}
 		action := a.gatewayActionFromDecision(req.ToolCall, decision, tenant, "not_required", "executed")
@@ -1688,6 +1713,25 @@ func sanitizeIdentifier(value string) string {
 }
 
 func (a *App) gatewayCriticalStart(w http.ResponseWriter) (func(), bool) {
+	if a.store != nil && a.store.PersistenceMode() == "postgres" {
+		release, ok, err := a.store.AcquireGatewayLease(context.Background(), cap(a.gatewayLimiter))
+		if err != nil {
+			a.gatewayMu.Lock()
+			a.gatewayRejected++
+			a.gatewayMu.Unlock()
+			writeError(w, http.StatusInternalServerError, err)
+			return nil, false
+		}
+		if !ok {
+			a.gatewayMu.Lock()
+			a.gatewayRejected++
+			a.gatewayMu.Unlock()
+			w.Header().Set("Retry-After", "1")
+			writeError(w, http.StatusTooManyRequests, errors.New("gateway is saturated"))
+			return nil, false
+		}
+		return release, true
+	}
 	if a.gatewayLimiter == nil {
 		return func() {}, true
 	}
@@ -1707,6 +1751,9 @@ func (a *App) gatewayCriticalStart(w http.ResponseWriter) (func(), bool) {
 }
 
 func (a *App) gatewayInFlight() int {
+	if a.store != nil && a.store.PersistenceMode() == "postgres" {
+		return 0
+	}
 	if a.gatewayLimiter == nil {
 		return 0
 	}
@@ -1927,6 +1974,40 @@ func sameTenant(left string, right string) bool {
 
 func (a *App) authenticationConfigured() bool {
 	return (a.auth != nil && a.auth.Enabled()) || (a.oidc != nil && a.oidc.Enabled()) || (a.saml != nil && a.saml.Enabled())
+}
+
+func (a *App) tenantAllowedForIdentity(tenant string) bool {
+	tenant = tenantOrDefault(tenant)
+	if tenant == "default" {
+		return true
+	}
+	if a.tenantRegistry == nil {
+		return false
+	}
+	if _, ok := a.tenantRegistry.get(tenant); ok {
+		return true
+	}
+	return false
+}
+
+func (a *App) loginRetryAfter(key string) (time.Duration, error) {
+	if a.store != nil && a.store.PersistenceMode() == "postgres" {
+		return a.store.LoginRetryAfter(key)
+	}
+	if a.auth == nil {
+		return 0, nil
+	}
+	return a.auth.LoginRetryAfter(key), nil
+}
+
+func (a *App) recordLoginAttempt(key string, success bool) (time.Duration, error) {
+	if a.store != nil && a.store.PersistenceMode() == "postgres" {
+		return a.store.RecordLoginAttempt(key, success)
+	}
+	if a.auth == nil {
+		return 0, nil
+	}
+	return a.auth.RecordLoginAttempt(key, success), nil
 }
 
 func (a *App) storeForTenant(tenant string) (*store.Store, error) {

@@ -280,6 +280,16 @@ func (s *Store) AddAudit(event domain.AuditEvent) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.db != nil {
+		recorded, err := s.postgresAddAuditLocked(event)
+		if err != nil {
+			s.lastErr = err.Error()
+			return err
+		}
+		s.audits = append(s.audits, recorded)
+		s.lastErr = ""
+		return nil
+	}
 	event = s.prepareAuditChainLocked(event)
 	s.audits = append(s.audits, event)
 	if err := s.persistAuditLocked(event); err != nil {
@@ -310,6 +320,12 @@ func (s *Store) ListAuditsForTenant(tenant string) []domain.AuditEvent {
 }
 
 func (s *Store) AuditChain() AuditChainSnapshot {
+	s.mu.RLock()
+	db := s.db
+	s.mu.RUnlock()
+	if db != nil {
+		return s.postgresAuditChainSnapshot()
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.auditChainSnapshotLocked()
@@ -388,6 +404,26 @@ func (s *Store) SchemaVersion() int {
 	defer s.mu.RUnlock()
 
 	return s.schemaVersion
+}
+
+func (s *Store) LoginRetryAfter(key string) (time.Duration, error) {
+	s.mu.RLock()
+	db := s.db
+	s.mu.RUnlock()
+	if db == nil {
+		return 0, nil
+	}
+	return s.postgresLoginRetryAfter(key)
+}
+
+func (s *Store) RecordLoginAttempt(key string, success bool) (time.Duration, error) {
+	s.mu.RLock()
+	db := s.db
+	s.mu.RUnlock()
+	if db == nil {
+		return 0, nil
+	}
+	return s.postgresRecordLoginAttempt(key, success)
 }
 
 func (s *Store) upsertAssetLocked(event domain.Event) {

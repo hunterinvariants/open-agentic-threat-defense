@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -12,6 +13,7 @@ import (
 )
 
 const postgresTimeout = 10 * time.Second
+const loginBackoffCap = 1 * time.Minute
 
 func NewWithPostgres(dsn string) (*Store, error) {
 	db, err := sql.Open("pgx", dsn)
@@ -206,6 +208,30 @@ CREATE INDEX IF NOT EXISTS idx_oatd_audit_events_occurred_at ON oatd_audit_event
 CREATE INDEX IF NOT EXISTS idx_oatd_audit_events_actor ON oatd_audit_events (actor);
 CREATE INDEX IF NOT EXISTS idx_oatd_audit_events_action ON oatd_audit_events (action);`,
 	},
+	{
+		Version: 2,
+		Name:    "audit_chain_state_and_login_attempts",
+		SQL: `
+CREATE TABLE IF NOT EXISTS oatd_audit_chain_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  head_hash TEXT NOT NULL DEFAULT '',
+  chain_index INTEGER NOT NULL DEFAULT 0,
+  valid BOOLEAN NOT NULL DEFAULT TRUE,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+INSERT INTO oatd_audit_chain_state (id, head_hash, chain_index, valid)
+VALUES (1, '', 0, TRUE)
+ON CONFLICT (id) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS oatd_login_attempts (
+  key TEXT PRIMARY KEY,
+  failures INTEGER NOT NULL DEFAULT 0,
+  blocked_until TIMESTAMPTZ,
+  last_seen TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_oatd_login_attempts_blocked_until ON oatd_login_attempts (blocked_until DESC);
+CREATE INDEX IF NOT EXISTS idx_oatd_login_attempts_last_seen ON oatd_login_attempts (last_seen DESC);`,
+	},
 }
 
 func (s *Store) postgresLoad(ctx context.Context) error {
@@ -229,6 +255,9 @@ func (s *Store) postgresLoad(ctx context.Context) error {
 		s.rebuildAssetsLocked()
 	}
 	s.rebuildAuditChainLocked()
+	if err := s.postgresSyncAuditChainState(ctx); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -332,6 +361,212 @@ func (s *Store) postgresLoadAudits(ctx context.Context) error {
 		s.audits = append(s.audits, event)
 	}
 	return rows.Err()
+}
+
+func (s *Store) postgresSyncAuditChainState(ctx context.Context) error {
+	if s.db == nil {
+		return nil
+	}
+	if _, err := s.db.ExecContext(ctx, `
+INSERT INTO oatd_audit_chain_state (id, head_hash, chain_index, valid, updated_at)
+VALUES (1, $1, $2, $3, now())
+ON CONFLICT (id) DO UPDATE SET
+  head_hash = EXCLUDED.head_hash,
+  chain_index = EXCLUDED.chain_index,
+  valid = EXCLUDED.valid,
+  updated_at = EXCLUDED.updated_at`,
+		s.auditChainHead, len(s.audits), s.auditChainValid); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Store) postgresAddAuditLocked(event domain.AuditEvent) (domain.AuditEvent, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), postgresTimeout)
+	defer cancel()
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return domain.AuditEvent{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_lock(72743001)`); err != nil {
+		_ = tx.Rollback()
+		return domain.AuditEvent{}, err
+	}
+	defer tx.ExecContext(context.Background(), `SELECT pg_advisory_unlock(72743001)`)
+
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO oatd_audit_chain_state (id, head_hash, chain_index, valid, updated_at)
+VALUES (1, '', 0, TRUE, now())
+ON CONFLICT (id) DO NOTHING`); err != nil {
+		_ = tx.Rollback()
+		return domain.AuditEvent{}, err
+	}
+
+	var headHash string
+	var chainIndex int
+	if err := tx.QueryRowContext(ctx, `SELECT head_hash, chain_index FROM oatd_audit_chain_state WHERE id = 1 FOR UPDATE`).Scan(&headHash, &chainIndex); err != nil {
+		_ = tx.Rollback()
+		return domain.AuditEvent{}, err
+	}
+
+	event.ChainIndex = chainIndex + 1
+	event.PrevHash = headHash
+	event.Hash = auditEventHash(event, event.PrevHash)
+	data, err := json.Marshal(event)
+	if err != nil {
+		_ = tx.Rollback()
+		return domain.AuditEvent{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO oatd_audit_events (id, occurred_at, actor, action, resource_type, resource_id, outcome, data)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+ON CONFLICT (id) DO UPDATE SET
+  occurred_at = EXCLUDED.occurred_at,
+  actor = EXCLUDED.actor,
+  action = EXCLUDED.action,
+  resource_type = EXCLUDED.resource_type,
+  resource_id = EXCLUDED.resource_id,
+  outcome = EXCLUDED.outcome,
+  data = EXCLUDED.data`,
+		event.ID, event.Timestamp, event.Actor, event.Action, event.ResourceType, event.ResourceID, event.Outcome, data); err != nil {
+		_ = tx.Rollback()
+		return domain.AuditEvent{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE oatd_audit_chain_state
+SET head_hash = $1, chain_index = $2, valid = TRUE, updated_at = now()
+WHERE id = 1`, event.Hash, event.ChainIndex); err != nil {
+		_ = tx.Rollback()
+		return domain.AuditEvent{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return domain.AuditEvent{}, err
+	}
+	s.auditChainHead = event.Hash
+	s.auditChainValid = true
+	return event, nil
+}
+
+func (s *Store) postgresAuditChainSnapshot() AuditChainSnapshot {
+	ctx, cancel := context.WithTimeout(context.Background(), postgresTimeout)
+	defer cancel()
+
+	s.mu.RLock()
+	db := s.db
+	s.mu.RUnlock()
+	if db == nil {
+		return AuditChainSnapshot{}
+	}
+
+	snap := AuditChainSnapshot{}
+	var headHash sql.NullString
+	var chainIndex sql.NullInt64
+	var valid sql.NullBool
+	if err := db.QueryRowContext(ctx, `SELECT head_hash, chain_index, valid FROM oatd_audit_chain_state WHERE id = 1`).Scan(&headHash, &chainIndex, &valid); err != nil {
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+		return s.auditChainSnapshotLocked()
+	}
+	if headHash.Valid {
+		snap.Head = headHash.String
+	}
+	if chainIndex.Valid {
+		snap.Linked = int(chainIndex.Int64)
+	}
+	if valid.Valid {
+		snap.Valid = valid.Bool
+	}
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM oatd_audit_events`).Scan(&snap.Total); err != nil {
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+		return s.auditChainSnapshotLocked()
+	}
+	if snap.Head == "" {
+		snap.Valid = snap.Total == 0
+		return snap
+	}
+	var (
+		id   string
+		ts   time.Time
+		data []byte
+	)
+	if err := db.QueryRowContext(ctx, `SELECT id, occurred_at, data FROM oatd_audit_events WHERE data->>'hash' = $1 LIMIT 1`, snap.Head).Scan(&id, &ts, &data); err != nil {
+		snap.Valid = false
+		return snap
+	}
+	snap.LastAuditID = id
+	snap.LastTimestamp = ts
+	var event domain.AuditEvent
+	if err := json.Unmarshal(data, &event); err == nil {
+		snap.Previous = event.PrevHash
+	}
+	return snap
+}
+
+func (s *Store) postgresLoginRetryAfter(key string) (time.Duration, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), postgresTimeout)
+	defer cancel()
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return 0, nil
+	}
+	var blockedUntil sql.NullTime
+	if err := s.db.QueryRowContext(ctx, `SELECT blocked_until FROM oatd_login_attempts WHERE key = $1`, key).Scan(&blockedUntil); err != nil {
+		if err == sql.ErrNoRows {
+			return 0, nil
+		}
+		return 0, err
+	}
+	if !blockedUntil.Valid {
+		return 0, nil
+	}
+	wait := time.Until(blockedUntil.Time)
+	if wait < 0 {
+		return 0, nil
+	}
+	return wait, nil
+}
+
+func (s *Store) postgresRecordLoginAttempt(key string, success bool) (time.Duration, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), postgresTimeout)
+	defer cancel()
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return 0, nil
+	}
+	now := time.Now().UTC()
+	if success {
+		if _, err := s.db.ExecContext(ctx, `DELETE FROM oatd_login_attempts WHERE key = $1`, key); err != nil {
+			return 0, err
+		}
+		return 0, nil
+	}
+	var failures int
+	err := s.db.QueryRowContext(ctx, `SELECT failures FROM oatd_login_attempts WHERE key = $1`, key).Scan(&failures)
+	if err != nil && err != sql.ErrNoRows {
+		return 0, err
+	}
+	if failures < 0 {
+		failures = 0
+	}
+	failures++
+	if failures > 8 {
+		failures = 8
+	}
+	delay := time.Second << (failures - 1)
+	if delay > loginBackoffCap {
+		delay = loginBackoffCap
+	}
+	_, err = s.db.ExecContext(ctx, `
+INSERT INTO oatd_login_attempts (key, failures, blocked_until, last_seen)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (key) DO UPDATE SET
+  failures = EXCLUDED.failures,
+  blocked_until = EXCLUDED.blocked_until,
+  last_seen = EXCLUDED.last_seen`,
+		key, failures, now.Add(delay), now)
+	return delay, err
 }
 
 func (s *Store) postgresPersistEventLocked(event domain.Event) error {

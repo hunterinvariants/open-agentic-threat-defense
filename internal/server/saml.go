@@ -2,14 +2,11 @@ package server
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"math/big"
 	"net/http"
 	"net/url"
 	"os"
@@ -69,7 +66,7 @@ func newSAMLProvider(opts samlOptions) (*samlProvider, error) {
 		return nil, fmt.Errorf("invalid saml idp metadata url: %w", err)
 	}
 
-	key, cert, err := loadSAMLKeyPair(keyPath, certPath, *serviceURL)
+	key, cert, err := loadSAMLKeyPair(keyPath, certPath)
 	if err != nil {
 		return nil, err
 	}
@@ -147,10 +144,7 @@ func (p *samlProvider) principalFromAttributes(attributes samlsp.Attributes) (au
 	}, nil
 }
 
-func loadSAMLKeyPair(keyPath, certPath string, serviceURL url.URL) (*rsa.PrivateKey, *x509.Certificate, error) {
-	if keyPath == "" && certPath == "" {
-		return generateSAMLKeyPair(serviceURL)
-	}
+func loadSAMLKeyPair(keyPath, certPath string) (*rsa.PrivateKey, *x509.Certificate, error) {
 	if keyPath == "" || certPath == "" {
 		return nil, nil, errors.New("saml key path and cert path must both be set")
 	}
@@ -169,39 +163,6 @@ func loadSAMLKeyPair(keyPath, certPath string, serviceURL url.URL) (*rsa.Private
 	cert, err := parseSAMLCertificate(certPEM)
 	if err != nil {
 		return nil, nil, err
-	}
-	return key, cert, nil
-}
-
-func generateSAMLKeyPair(serviceURL url.URL) (*rsa.PrivateKey, *x509.Certificate, error) {
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		return nil, nil, fmt.Errorf("generate saml key: %w", err)
-	}
-	now := time.Now().UTC()
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(now.UnixNano()),
-		Subject: pkix.Name{
-			CommonName:   "Open Agentic Threat Defense",
-			Organization: []string{"Open Agentic Threat Defense"},
-		},
-		NotBefore:             now.Add(-time.Hour),
-		NotAfter:              now.Add(365 * 24 * time.Hour),
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
-		BasicConstraintsValid: true,
-		IsCA:                  true,
-	}
-	if host := strings.TrimSpace(serviceURL.Hostname()); host != "" {
-		template.DNSNames = []string{host}
-	}
-	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	if err != nil {
-		return nil, nil, fmt.Errorf("generate saml cert: %w", err)
-	}
-	cert, err := x509.ParseCertificate(der)
-	if err != nil {
-		return nil, nil, fmt.Errorf("parse generated saml cert: %w", err)
 	}
 	return key, cert, nil
 }
