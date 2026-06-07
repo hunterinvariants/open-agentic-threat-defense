@@ -13,6 +13,24 @@ func init() {
 	_ = os.Setenv("OATD_SESSION_SECRET", "test-session-secret")
 }
 
+func TestFinalizeAuditChainSnapshotCoverage(t *testing.T) {
+	full := finalizeAuditChainSnapshot(AuditChainSnapshot{Total: 5, Linked: 5, Valid: true})
+	if !full.Valid || full.Unlinked != 0 {
+		t.Fatalf("fully linked chain should stay valid with 0 unlinked, got valid=%v unlinked=%d", full.Valid, full.Unlinked)
+	}
+	gap := finalizeAuditChainSnapshot(AuditChainSnapshot{Total: 14, Linked: 7, Valid: true})
+	if gap.Valid {
+		t.Fatal("chain with unlinked records must not report valid:true")
+	}
+	if gap.Unlinked != 7 {
+		t.Fatalf("expected unlinked=7, got %d", gap.Unlinked)
+	}
+	empty := finalizeAuditChainSnapshot(AuditChainSnapshot{Total: 0, Linked: 0, Valid: true})
+	if !empty.Valid || empty.Unlinked != 0 {
+		t.Fatalf("empty chain should stay valid, got valid=%v unlinked=%d", empty.Valid, empty.Unlinked)
+	}
+}
+
 func TestStorePersistsAndLoadsSnapshot(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
 	s, err := NewWithPath(path)

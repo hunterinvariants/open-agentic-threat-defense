@@ -16,6 +16,7 @@ import (
 type AuditChainSnapshot struct {
 	Total         int       `json:"total"`
 	Linked        int       `json:"linked"`
+	Unlinked      int       `json:"unlinked"`
 	Head          string    `json:"head"`
 	Previous      string    `json:"previous"`
 	Valid         bool      `json:"valid"`
@@ -23,6 +24,24 @@ type AuditChainSnapshot struct {
 	Anchored      bool      `json:"anchored,omitempty"`
 	LastAuditID   string    `json:"last_audit_id,omitempty"`
 	LastTimestamp time.Time `json:"last_timestamp,omitempty"`
+}
+
+// finalizeAuditChainSnapshot enforces coverage honesty: a chain that does not
+// link every stored audit record is not fully valid, and the gap is reported
+// explicitly via Unlinked so the snapshot never shows valid:true while audit
+// records sit outside the anchored chain.
+func finalizeAuditChainSnapshot(snap AuditChainSnapshot) AuditChainSnapshot {
+	if snap.Linked < 0 {
+		snap.Linked = 0
+	}
+	if snap.Linked > snap.Total {
+		snap.Linked = snap.Total
+	}
+	snap.Unlinked = snap.Total - snap.Linked
+	if snap.Unlinked > 0 {
+		snap.Valid = false
+	}
+	return snap
 }
 
 func (s *Store) prepareAuditChainLocked(event domain.AuditEvent) domain.AuditEvent {
@@ -96,7 +115,7 @@ func (s *Store) auditChainSnapshotLocked() AuditChainSnapshot {
 func (s *Store) AuditChainForTenant(tenant string) AuditChainSnapshot {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.auditChainSnapshotForTenantLocked(tenant)
+	return finalizeAuditChainSnapshot(s.auditChainSnapshotForTenantLocked(tenant))
 }
 
 func (s *Store) auditChainSnapshotForTenantLocked(tenant string) AuditChainSnapshot {

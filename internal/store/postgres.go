@@ -398,12 +398,11 @@ func (s *Store) postgresAddAuditLocked(event domain.AuditEvent) (domain.AuditEve
 	if err != nil {
 		return domain.AuditEvent{}, err
 	}
-	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_lock(72743001)`); err != nil {
-		_ = tx.Rollback()
-		return domain.AuditEvent{}, err
-	}
-	defer tx.ExecContext(context.Background(), `SELECT pg_advisory_unlock(72743001)`)
-
+	// Concurrent audit writers are serialized by the SELECT ... FOR UPDATE on the
+	// singleton chain-state row below. A session-level pg_advisory_lock here is
+	// both redundant and unsafe: the tx-deferred pg_advisory_unlock runs after
+	// Commit (ErrTxDone) and leaks the global lock, which then blocks the next
+	// NewWithPostgres migration on the same lock id.
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO oatd_audit_chain_state (id, head_hash, chain_index, valid, anchor_hmac, updated_at)
 VALUES (1, '', 0, TRUE, '', now())

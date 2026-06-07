@@ -325,11 +325,11 @@ func (s *Store) AuditChain() AuditChainSnapshot {
 	db := s.db
 	s.mu.RUnlock()
 	if db != nil {
-		return s.postgresAuditChainSnapshot()
+		return finalizeAuditChainSnapshot(s.postgresAuditChainSnapshot())
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.auditChainSnapshotLocked()
+	return finalizeAuditChainSnapshot(s.auditChainSnapshotLocked())
 }
 
 func (s *Store) ListAssets() []domain.Asset {
