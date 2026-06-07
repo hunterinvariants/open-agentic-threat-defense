@@ -9,6 +9,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 permissions:
+  id-token: write
   contents: write
 
 jobs:
@@ -59,13 +60,9 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
       - name: Sign checksum manifest
-        if: ${{ secrets.COSIGN_PRIVATE_KEY != '' }}
-        env:
-          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
-          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
         shell: bash
         run: |
-          cosign sign-blob --yes --key env://COSIGN_PRIVATE_KEY --output-signature dist/SHA256SUMS.sig dist/SHA256SUMS
+          cosign sign-blob --yes --bundle dist/SHA256SUMS.bundle --output-signature dist/SHA256SUMS.sig dist/SHA256SUMS
       - uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda
         with:
           files: dist/*

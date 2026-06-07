@@ -91,8 +91,8 @@ GitHub security automation includes CodeQL analysis and Dependabot updates for
 Go modules and GitHub Actions, plus dependency-review checks on pull requests.
 
 Tagged releases publish platform binaries, an SPDX SBOM, and a `SHA256SUMS`
-manifest. If signing secrets are configured, the checksum manifest is signed as
-well.
+manifest. The release workflow also signs the checksum manifest with Sigstore
+keyless signing.
 
 Postgres operators can create and restore portable JSON backups with
 `oadtdctl backup` and `oadtdctl restore`.
