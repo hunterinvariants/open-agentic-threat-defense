@@ -376,7 +376,7 @@ func (s *Store) postgresSyncAuditChainState(ctx context.Context) error {
 		return nil
 	}
 	if _, err := s.db.ExecContext(ctx, `
-INSERT INTO oatd_audit_chain_state (id, head_hash, chain_index, valid, updated_at)
+INSERT INTO oatd_audit_chain_state (id, head_hash, chain_index, valid, anchor_hmac, updated_at)
 VALUES (1, $1, $2, $3, $4, now())
 ON CONFLICT (id) DO UPDATE SET
   head_hash = EXCLUDED.head_hash,
