@@ -18,15 +18,28 @@ malware behavior, or autonomous propagation. Demo data generates telemetry only.
   suspicious model runtime activity, and versioned threat-pack content.
 - Inline tool-call PEP for enforce-before-execute decisions at the tool
   boundary, backed by a separate PDP endpoint for diagnostics.
-- Gateway queue, approval polling, and a transport proxy for tool backends.
+- Gateway queue, approval polling, a transport proxy for tool backends, and an
+  MCP reverse-proxy path for transparent interception.
+- Org-scoped policy sets: per-tenant overrides of the approved-tool and
+  approved-egress allowlists applied inline in the gateway, managed by an
+  admin-only API or seeded from a file at startup.
+- Deception/canary token registry with a management API, plus hot policy and
+  threat-pack reload via `SIGHUP` or an admin endpoint.
 - Correlator for multi-signal sequences such as discovery, credential touch,
   agent tool call, and outbound flow.
 - Dry-run response planner for host isolation, egress blocking, tool disabling,
-  ticket creation, and secret rotation, with approval-gated execution export
-  plus a separate incident-ticket connector.
-- User/token authentication with role-based access control.
+  ticket creation, and secret rotation, with approval-gated execution export.
+- Native incident-ticket connectors for GitHub issues, Jira, and ServiceNow,
+  plus a generic ticket webhook, dispatched first-enabled-wins.
+- GitHub workflow dispatch for approval-gated response execution.
+- User/token authentication with role-based access control, plus OIDC and SAML
+  single sign-on and logical or physical multi-tenancy.
+- Ed25519-signed commercial license tokens with an edition-status endpoint and
+  an `oadtdctl license` keygen/issue/verify workflow.
 - Audit log for authentication failures, RBAC denials, ingestion, response
-  planning, and response approvals.
+  planning, and response approvals, with tamper-evident hash chaining and a
+  validation endpoint.
+- Per-asset investigation timeline endpoint.
 - `oadtdctl replay` for safe JSONL telemetry replay into the ingest API.
 - `oadtdctl agent` for long-running tail-based collection from supported
   defensive telemetry sources, including native Windows Event Log and Linux
@@ -34,9 +47,6 @@ malware behavior, or autonomous propagation. Demo data generates telemetry only.
 - Browser dashboard with asset risk graph, alerts, events, rules, and response
   actions, plus session-based dashboard login.
 - Alert webhook export for SIEM-style integrations.
-- Tamper-evident audit chaining and an audit chain endpoint for validation.
-- GitHub issue creation for incident tickets and GitHub workflow dispatch for
-  approval-gated response execution.
 - systemd and Windows service starter packaging.
 - AGPLv3-or-later community license, commercial dual-license path, and CLA from
   day 1.
@@ -53,6 +63,9 @@ $env:GOMODCACHE="$PWD\.cache\go-mod"
 go run ./cmd/oadtd --demo --addr 127.0.0.1:8080
 ```
 
+The server binds to a loopback address by default. Binding a non-loopback
+address requires authentication, or `--insecure` for an explicitly open mode.
+
 Run with Postgres persistence:
 
 ```powershell
@@ -66,12 +79,6 @@ Run with local JSON persistence for development:
 
 ```powershell
 go run ./cmd/oadtd --demo --addr 127.0.0.1:8080 --data .cache\oadtd-state.json
-```
-
-Run with an explicit policy configuration:
-
-```powershell
-go run ./cmd/oadtd --demo --addr 127.0.0.1:8080 --policy configs\example.policy.json
 ```
 
 Open:
@@ -90,8 +97,8 @@ $env:GOMODCACHE="$PWD\.cache\go-mod"
 go test ./...
 ```
 
-GitHub CI runs the same test suite with a real Postgres service and builds
-Linux/Windows binaries for `amd64` and `arm64`.
+GitHub CI runs the same test suite with a real Postgres service, smoke-tests a
+live startup, and builds Linux/Windows binaries for `amd64` and `arm64`.
 
 GitHub security automation includes CodeQL analysis and Dependabot updates for
 Go modules and GitHub Actions, plus dependency-review checks on pull requests.
@@ -103,28 +110,12 @@ keyless signing.
 Postgres operators can create and restore portable JSON backups with
 `oadtdctl backup` and `oadtdctl restore`.
 
-Approved response actions can be exported to an external webhook transport
-after operator approval by setting:
-
-```text
---ticket-webhook-url     optional webhook URL for incident ticket creation
---ticket-webhook-token   optional bearer token for ticket webhook
---response-webhook-url    optional webhook URL for approved response actions
---response-webhook-token  optional bearer token for response webhook
-```
-
 Run the optional Postgres integration test:
 
 ```powershell
 docker compose up -d postgres
 $env:OATD_TEST_POSTGRES_DSN="postgres://oadtd:oadtd@localhost:5432/oadtd?sslmode=disable"
 go test ./internal/store -run TestPostgresPersistenceIntegration -count=1
-```
-
-Replay safe JSONL telemetry into a running server:
-
-```powershell
-go run ./cmd/oadtdctl replay --file examples\demo-events.jsonl
 ```
 
 ## API
@@ -167,71 +158,127 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8080/api/events `
   -Body '{"kind":"deception_hit","asset_id":"dev-agent-01","signal":"canary token touched"}'
 ```
 
-Useful endpoints:
+Endpoints (RBAC roles apply only when authentication is configured):
 
-- `GET /healthz`
-- `GET /readyz`
-- `GET /api/status`
-- `POST /api/gateway/decide`
-- `POST /api/gateway/execute`
-- `POST /api/gateway/proxy`
-- `GET /api/gateway/queue`
-- `GET /api/gateway/actions/{id}`
-- `GET /api/events`
-- `POST /api/events`
-- `GET /api/alerts`
-- `GET /api/assets`
-- `GET /api/audit`
-- `GET /api/audit/chain`
-- `GET /api/policies`
-- `GET /api/responses`
-- `POST /api/responses`
-- `POST /api/demo`
+| Method | Path | Roles | Purpose |
+| --- | --- | --- | --- |
+| GET | `/healthz` | none | Liveness probe returning version |
+| GET | `/readyz` | none | Readiness probe pinging storage |
+| GET | `/api/status` | any authenticated | Tenant-scoped counts and gateway/storage status |
+| GET/POST/DELETE | `/api/session` | none | Session/SSO info, login, logout |
+| GET | `/api/sso/oidc/login`, `/api/sso/oidc/callback` | none | OIDC SSO login and callback |
+| GET | `/api/sso/saml/login`, `/api/sso/saml/complete` | none | SAML SSO login and completion |
+| POST | `/api/gateway/decide` | ingestor, analyst, operator | Gate a tool call and return a verdict (PDP) |
+| POST | `/api/gateway/execute` | ingestor, analyst, operator | Gate then allow/block/queue/execute a tool call (PEP) |
+| POST | `/api/gateway/proxy` | ingestor, analyst, operator | Gate and forward a tool call to an upstream URL |
+| POST | `/api/mcp/proxy` | ingestor, analyst, operator | Gate and forward a request to the MCP upstream |
+| GET | `/api/gateway/queue` | analyst, operator | List pending gateway approval actions |
+| GET | `/api/gateway/actions/{id}` | analyst, operator | Fetch a single gateway action |
+| POST | `/api/policy/reload` | admin | Hot-reload policy and threat-pack files |
+| GET/POST/PUT/DELETE | `/api/policy/tenants` | admin | Manage per-tenant policy overlays |
+| GET/POST/DELETE | `/api/deception/tokens` | operator | List, register, and remove deception tokens |
+| GET | `/api/timeline` | any authenticated | Chronological investigation view for one asset |
+| GET | `/api/license` | any authenticated | Report license/edition status |
+| GET/POST | `/api/events` | GET: any authenticated; POST: ingestor, analyst, operator | List or ingest events |
+| GET | `/api/alerts` | any authenticated | List tenant alerts |
+| GET | `/api/assets` | any authenticated | List tenant assets |
+| GET | `/api/policies` | any authenticated | List active policy rules |
+| GET | `/api/audit` | analyst, operator | List tenant audit log entries |
+| GET | `/api/audit/chain` | analyst, operator | Return the hash-chained audit log |
+| GET/POST | `/api/responses` | GET: any authenticated; POST: analyst, operator | List response actions or plan actions for an alert |
+| POST | `/api/responses/approve` | operator | Approve and execute a pending response action |
+| GET/POST | `/api/tenants` | admin | List or register tenant backends |
+| GET/PUT/DELETE | `/api/tenants/{id}` | admin | Get, update, or delete one tenant backend |
+| POST | `/api/demo` | ingestor, analyst, operator | Load demo events for the tenant |
 
 ## Runtime Options
 
 ```text
---addr                 HTTP listen address, default :8080
---web                  static dashboard directory, default web
---demo                 load safe demo telemetry at startup
---data                 optional JSON snapshot path for local development persistence
---postgres-dsn         Postgres DSN for production persistence, defaults to OATD_POSTGRES_DSN
---policy               optional JSON policy configuration path
---api-token            legacy admin token, defaults to OATD_API_TOKEN
---alert-webhook-url    optional SIEM/webhook URL for new alerts
---alert-webhook-token  optional bearer token for alert webhook
---ticket-webhook-url   optional webhook URL for incident ticket creation
---ticket-webhook-token optional bearer token for ticket webhook
---response-webhook-url optional webhook URL for approved response actions
---response-webhook-token optional bearer token for response webhook
---github-api-base      optional GitHub API base URL
---github-owner         GitHub owner for issue and workflow integrations
---github-repo          GitHub repository for issue and workflow integrations
---github-token         GitHub token for issue and workflow integrations
---github-workflow-file GitHub workflow file for approved response actions
---github-workflow-ref  GitHub ref for workflow dispatch
---oidc-issuer-url      OIDC issuer URL for SSO login
---oidc-client-id       OIDC client ID
---oidc-client-secret   OIDC client secret
---oidc-redirect-url    OIDC redirect URL
---oidc-scopes          comma-separated OIDC scopes, default openid,profile,email
---oidc-tenant-claim    OIDC claim name for tenant assignment
---oidc-role-claim      OIDC claim name for roles
---oidc-email-claim     OIDC claim name for username/email
---saml-root-url        SAML service provider root URL
+Core
+--addr                  HTTP listen address (default :8080)
+--web                   static dashboard directory (default web)
+--demo                  load safe demo telemetry at startup
+--insecure              allow open mode on non-loopback listen addresses
+--retention-window      retention window for events, alerts, actions, audits (default 30d)
+--gateway-max-in-flight max in-flight gateway operations before backpressure (default 64)
+--trusted-proxies       comma-separated trusted proxy CIDRs or IPs
+
+Persistence and policy
+--data                  optional JSON snapshot path for local persistence
+--postgres-dsn          Postgres DSN, defaults to OATD_POSTGRES_DSN
+--policy                optional JSON policy configuration path
+--threat-pack           optional threat pack JSON file
+--deception-tokens      optional JSON file of deception/canary tokens
+--tenant-policies       optional JSON file of org-scoped policy sets
+
+Authentication and licensing
+--api-token             legacy admin token, defaults to OATD_API_TOKEN
+--license-file          path to a commercial license token file
+--license-public-key    base64 ed25519 public key to verify the license
+
+Webhooks
+--alert-webhook-url / --alert-webhook-token         new-alert SIEM/webhook export
+--ticket-webhook-url / --ticket-webhook-token       incident ticket webhook
+--response-webhook-url / --response-webhook-token    approved response webhook
+
+GitHub integration
+--github-api-base       optional GitHub API base URL
+--github-owner          GitHub owner for issue and workflow integrations
+--github-repo           GitHub repository for issue and workflow integrations
+--github-token          GitHub token for issue and workflow integrations
+--github-workflow-file  GitHub workflow file for approved response actions
+--github-workflow-ref   GitHub ref for workflow dispatch
+
+Jira integration
+--jira-base-url         Jira base URL for incident tickets
+--jira-email            Jira account email
+--jira-api-token        Jira API token
+--jira-project-key      Jira project key for incidents
+--jira-issue-type       Jira issue type (default Task)
+
+ServiceNow integration
+--servicenow-url        ServiceNow instance URL for incidents
+--servicenow-user       ServiceNow user
+--servicenow-password   ServiceNow password
+
+MCP interception
+--mcp-upstream-url      upstream MCP server URL for transparent interception
+--mcp-upstream-token    optional bearer token for the MCP upstream
+
+OIDC single sign-on
+--oidc-issuer-url       OIDC issuer URL for SSO login
+--oidc-client-id        OIDC client ID
+--oidc-client-secret    OIDC client secret
+--oidc-redirect-url     OIDC redirect URL
+--oidc-scopes           comma-separated OIDC scopes (default openid,profile,email)
+--oidc-tenant-claim     OIDC claim name for tenant assignment
+--oidc-role-claim       OIDC claim name for roles
+--oidc-email-claim      OIDC claim name for username/email
+
+SAML single sign-on
+--saml-root-url         SAML service provider root URL
 --saml-idp-metadata-url SAML identity provider metadata URL
---saml-key-path        SAML signing key path
---saml-cert-path       SAML signing certificate path
+--saml-key-path         SAML signing key path
+--saml-cert-path        SAML signing certificate path
 --saml-tenant-attribute SAML attribute name for tenant assignment
---saml-role-attribute  SAML attribute name for roles
---saml-email-attribute SAML attribute name for username/email
---public-url           canonical public URL for HA and SSO callbacks
---instance-name        instance label for HA deployments
---tenant-isolation-mode logical or physical tenant isolation
---tenant-registry-path path to the tenant registry JSON
---tenant-postgres-dsn-template Postgres DSN template for tenant stores
---tenant-data-path-template file path template for tenant stores
+--saml-role-attribute   SAML attribute name for roles
+--saml-email-attribute  SAML attribute name for username/email
+
+High availability and multi-tenancy
+--public-url            canonical public URL for HA and SSO callbacks
+--instance-name         instance label for HA deployments
+--tenant-isolation-mode logical or physical tenant isolation (default logical)
+--tenant-registry-path  path to the tenant registry JSON
+--tenant-postgres-dsn-template Postgres DSN template for physical tenant stores
+--tenant-data-path-template    file path template for physical tenant stores
 ```
+
+Every flag has a matching `OATD_*` environment variable (for example `--addr`
+has no env var, while `--postgres-dsn` reads `OATD_POSTGRES_DSN`). A few
+behaviors are env-only: `OATD_SESSION_SECRET` (required when authentication or
+SSO is configured), `OATD_AUDIT_HMAC_SECRET` (anchors the audit hash chain),
+and `OATD_MANIFEST_HMAC_SECRET` / `OATD_MANIFEST_REQUIRE_SIGNED` (threat-pack
+manifest signing).
 
 When users are configured in the policy file, all API endpoints require
 `Authorization: Bearer <token>` or `X-OATD-Token: <token>` and are checked
@@ -252,6 +299,72 @@ For physical tenant isolation, set `--tenant-isolation-mode physical` and
 either `--tenant-postgres-dsn-template` or `--tenant-data-path-template`. The
 dashboard exposes a tenant admin panel backed by `GET /api/tenants` and
 `POST /api/tenants`.
+
+## Incident-Ticket Connectors
+
+Confirmed or approved response actions can open an incident ticket. Connectors
+are evaluated first-enabled-wins in this order: GitHub issue, Jira, ServiceNow,
+then the generic ticket webhook. A connector is enabled only when all of its
+required settings are present, and exactly one ticket is created per action.
+
+GitHub issues use the GitHub integration flags above. Jira creates an issue via
+`POST <jira-base-url>/rest/api/2/issue` with HTTP Basic auth (`email:api-token`):
+
+```text
+--jira-base-url     https://your-org.atlassian.net
+--jira-email        bot@your-org.com
+--jira-api-token    <api token>
+--jira-project-key  SEC
+--jira-issue-type   Task            # optional, defaults to Task
+```
+
+ServiceNow creates an incident via `POST <servicenow-url>/api/now/table/incident`
+with HTTP Basic auth (`user:password`):
+
+```text
+--servicenow-url       https://your-instance.service-now.com
+--servicenow-user      integration.user
+--servicenow-password  <password>
+```
+
+The generic ticket webhook (`--ticket-webhook-url` / `--ticket-webhook-token`)
+remains available as a fallback transport.
+
+## Commercial License Tokens
+
+The product ships as a community edition by default. A signed license token
+upgrades the reported edition. Licenses are Ed25519-signed: the vendor issues
+tokens with a private key, and a deployment verifies them with the public key,
+so a license cannot be forged without the private key. This is the technical
+edition gate; it is separate from the AGPL / commercial legal licensing below.
+
+Generate a key pair (vendor side, keep the private key secret):
+
+```powershell
+go run ./cmd/oadtdctl license keygen
+```
+
+Issue a license for an organization:
+
+```powershell
+go run ./cmd/oadtdctl license issue `
+  --private-key $env:OATD_LICENSE_PRIVATE_KEY `
+  --org "Example Corp" --features sso,multi-tenant --valid-for 8760h
+```
+
+Verify a token against the public key:
+
+```powershell
+go run ./cmd/oadtdctl license verify --public-key <base64-public-key> --token <token>
+```
+
+Run the server with a license; `GET /api/license` reports the edition, features,
+expiry, and validity:
+
+```powershell
+go run ./cmd/oadtd --addr 127.0.0.1:8080 `
+  --license-file license.token --license-public-key <base64-public-key>
+```
 
 ## Policy Configuration
 
@@ -291,18 +404,41 @@ Roles:
 - `admin`: all API operations.
 
 Audit logs require `analyst`, `operator`, or `admin`.
+
+The policy and threat pack can be hot-reloaded without a restart by sending
+`SIGHUP` or calling `POST /api/policy/reload` as an admin. Deception/canary
+tokens can be seeded with `--deception-tokens` and managed at runtime through
+`GET/POST/DELETE /api/deception/tokens`.
+
 The inline gateway and proxy path enforce a bounded in-flight limit to apply
 backpressure on the critical decision path; configure it with
 `--gateway-max-in-flight` or `OATD_GATEWAY_MAX_IN_FLIGHT`.
 
-The MCP reverse-proxy path is enabled by setting:
+The MCP reverse-proxy path is enabled by setting `--mcp-upstream-url` and an
+optional `--mcp-upstream-token`.
 
-```text
---mcp-upstream-url    upstream MCP server URL
---mcp-upstream-token  optional bearer token for the upstream
+### Org-Scoped Policy Sets
+
+Each tenant can override the global approved-tool and approved-egress
+allowlists. A non-empty list fully replaces the global list for that tenant's
+gateway and detection decisions; an omitted list falls back to the global
+policy, so a tenant without an overlay behaves exactly as before.
+
+Overlays are managed through the admin-only `/api/policy/tenants` endpoint
+(`GET` to list, `POST`/`PUT` to set, `DELETE?tenant_id=...` to remove) and can
+be seeded at startup from a JSON file with `--tenant-policies`:
+
+```json
+[
+  {
+    "tenant_id": "acme",
+    "approved_tools": ["asset_inventory", "siem_search"],
+    "approved_egress": ["acme-cdn.example.net"]
+  }
+]
 ```
 
-## Telemetry Replay
+## Telemetry Replay and Collectors
 
 `oadtdctl replay` reads newline-delimited JSON events and posts them to
 `/api/events`.
@@ -350,6 +486,12 @@ Native collector modes:
 ```powershell
 go run ./cmd/oadtdctl agent --source windows-eventlog --log-name Microsoft-Windows-Sysmon/Operational --url http://localhost:8080
 go run ./cmd/oadtdctl agent --source journald --journal-unit ssh.service --url http://localhost:8080
+```
+
+Sign a threat-pack manifest (requires `OATD_MANIFEST_HMAC_SECRET`):
+
+```powershell
+go run ./cmd/oadtdctl sign-manifest --file configs\example.threat-pack.json
 ```
 
 Operations notes are in [docs/operations.md](docs/operations.md).
