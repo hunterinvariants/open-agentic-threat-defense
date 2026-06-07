@@ -251,8 +251,18 @@ The service records audit events for authentication failures, RBAC denials,
 event ingestion, demo loads, response planning, and response approvals. Audit
 events are stored in Postgres table `oatd_audit_events` in production mode and
 are exposed through `GET /api/audit`.
+Audit records are hash-chained and the chain state is visible through
+`GET /api/audit/chain`.
 
 `GET /api/audit` requires `analyst`, `operator`, or `admin`.
+`GET /api/audit/chain` requires `analyst`, `operator`, or `admin`.
+
+## Gateway Control
+
+The inline gateway enforces a bounded in-flight limit on the critical path.
+Set `--gateway-max-in-flight` or `OATD_GATEWAY_MAX_IN_FLIGHT` to control
+backpressure. `POST /api/gateway/proxy` forwards tool payloads to configured
+upstreams only after the gate allows them.
 
 ## RBAC
 

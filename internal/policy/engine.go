@@ -13,6 +13,7 @@ import (
 type Engine struct {
 	approvedTools       map[string]struct{}
 	approvedEgressHosts map[string]struct{}
+	pack                ThreatPack
 	historyMu           sync.Mutex
 	history             map[string]*gatewayHistoryState
 }
@@ -20,21 +21,15 @@ type Engine struct {
 type Config struct {
 	ApprovedTools       []string
 	ApprovedEgressHosts []string
+	ThreatPack          ThreatPack
 }
 
 func DefaultConfig() Config {
+	pack := DefaultThreatPack()
 	return Config{
-		ApprovedTools: []string{
-			"asset_inventory",
-			"ticket_create",
-			"policy_read",
-			"siem_search",
-		},
-		ApprovedEgressHosts: []string{
-			"api.openai.com",
-			"github.com",
-			"login.microsoftonline.com",
-		},
+		ApprovedTools:       append([]string(nil), pack.ApprovedTools...),
+		ApprovedEgressHosts: append([]string(nil), pack.ApprovedEgressHosts...),
+		ThreatPack:          pack,
 	}
 }
 
@@ -58,10 +53,32 @@ func New(config Config) *Engine {
 			approvedEgressHosts[host] = struct{}{}
 		}
 	}
+	pack := config.ThreatPack
+	if err := pack.Validate(); err != nil {
+		pack = DefaultThreatPack()
+	}
+	if len(pack.ApprovedTools) == 0 {
+		pack.ApprovedTools = append([]string(nil), config.ApprovedTools...)
+	}
+	if len(pack.ApprovedEgressHosts) == 0 {
+		pack.ApprovedEgressHosts = append([]string(nil), config.ApprovedEgressHosts...)
+	}
+	if len(pack.Rules) == 0 {
+		pack.Rules = defaultRuleDescriptors(pack.Name, pack.Version)
+	}
+	for i := range pack.Rules {
+		if pack.Rules[i].PackName == "" {
+			pack.Rules[i].PackName = pack.Name
+		}
+		if pack.Rules[i].PackVersion == "" {
+			pack.Rules[i].PackVersion = pack.Version
+		}
+	}
 
 	return &Engine{
 		approvedTools:       approvedTools,
 		approvedEgressHosts: approvedEgressHosts,
+		pack:                pack,
 		history:             make(map[string]*gatewayHistoryState),
 	}
 }
@@ -74,54 +91,14 @@ func withDefaults(config Config) Config {
 	if len(config.ApprovedEgressHosts) == 0 {
 		config.ApprovedEgressHosts = defaults.ApprovedEgressHosts
 	}
+	if config.ThreatPack.Version == "" {
+		config.ThreatPack = defaults.ThreatPack
+	}
 	return config
 }
 
 func (e *Engine) Rules() []domain.RuleDescriptor {
-	return []domain.RuleDescriptor{
-		{
-			ID:          "agent.tool.unapproved",
-			Name:        "Unapproved agent tool call",
-			Description: "Flags AI-agent or MCP tool calls outside the approved tool manifest.",
-			Severity:    domain.SeverityHigh,
-			Signals:     []string{"agent_tool_call", "tool_manifest"},
-		},
-		{
-			ID:          "agent.secret.exposure",
-			Name:        "Potential secret exposure through agent context",
-			Description: "Flags commands and tool calls that combine agent activity with token, secret, or environment access.",
-			Severity:    domain.SeverityCritical,
-			Signals:     []string{"agent_tool_call", "secret", "token", "environment"},
-		},
-		{
-			ID:          "network.egress.unknown",
-			Name:        "Unknown outbound destination",
-			Description: "Flags non-private outbound network flows to destinations outside the approved egress list.",
-			Severity:    domain.SeverityMedium,
-			Signals:     []string{"network_flow", "egress"},
-		},
-		{
-			ID:          "process.discovery.chain",
-			Name:        "Suspicious discovery process",
-			Description: "Flags process commands commonly seen during discovery, credential access, or lateral movement.",
-			Severity:    domain.SeverityHigh,
-			Signals:     []string{"process_start", "discovery", "credential_access"},
-		},
-		{
-			ID:          "deception.canary.hit",
-			Name:        "Canary or deception asset touched",
-			Description: "Flags interaction with a decoy token, honey credential, or instrumented deception service.",
-			Severity:    domain.SeverityCritical,
-			Signals:     []string{"deception_hit", "canary"},
-		},
-		{
-			ID:          "model.runtime.suspicious",
-			Name:        "Suspicious local model runtime behavior",
-			Description: "Flags local model runtime activity combined with unexpected downloads, shelling out, or external egress.",
-			Severity:    domain.SeverityHigh,
-			Signals:     []string{"model_runtime", "gpu", "download", "shell"},
-		},
-	}
+	return append([]domain.RuleDescriptor(nil), e.pack.Rules...)
 }
 
 func (e *Engine) Evaluate(event domain.Event) []domain.Alert {

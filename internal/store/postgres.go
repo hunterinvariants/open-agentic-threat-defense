@@ -228,6 +228,7 @@ func (s *Store) postgresLoad(ctx context.Context) error {
 	if len(s.assets) == 0 {
 		s.rebuildAssetsLocked()
 	}
+	s.rebuildAuditChainLocked()
 	return nil
 }
 

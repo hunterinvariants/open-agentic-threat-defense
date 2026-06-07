@@ -86,6 +86,10 @@ func TestStorePersistsAndLoadsAuditSnapshot(t *testing.T) {
 	if err := s.AddAudit(audit); err != nil {
 		t.Fatalf("add audit: %v", err)
 	}
+	chain := s.AuditChain()
+	if !chain.Valid || chain.Total != 1 || chain.Linked != 1 || chain.Head == "" {
+		t.Fatalf("unexpected audit chain after add: %#v", chain)
+	}
 
 	loaded, err := NewWithPath(path)
 	if err != nil {
@@ -94,6 +98,10 @@ func TestStorePersistsAndLoadsAuditSnapshot(t *testing.T) {
 	audits := loaded.ListAudits()
 	if len(audits) != 1 || audits[0].Actor != "alice" || audits[0].Action != "responses.approve" {
 		t.Fatalf("unexpected audit events: %#v", audits)
+	}
+	loadedChain := loaded.AuditChain()
+	if !loadedChain.Valid || loadedChain.Head == "" || loadedChain.Total != 1 {
+		t.Fatalf("unexpected loaded chain: %#v", loadedChain)
 	}
 }
 

@@ -19,6 +19,8 @@ type Store struct {
 	alerts          []domain.Alert
 	actions         []domain.ResponseAction
 	audits          []domain.AuditEvent
+	auditChainHead  string
+	auditChainValid bool
 	assets          map[string]domain.Asset
 	fingerprints    map[string]struct{}
 	path            string
@@ -29,9 +31,10 @@ type Store struct {
 
 func New() *Store {
 	return &Store{
-		mode:         "memory",
-		assets:       make(map[string]domain.Asset),
-		fingerprints: make(map[string]struct{}),
+		mode:            "memory",
+		assets:          make(map[string]domain.Asset),
+		fingerprints:    make(map[string]struct{}),
+		auditChainValid: true,
 	}
 }
 
@@ -245,6 +248,7 @@ func (s *Store) AddAudit(event domain.AuditEvent) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	event = s.prepareAuditChainLocked(event)
 	s.audits = append(s.audits, event)
 	if err := s.persistAuditLocked(event); err != nil {
 		s.lastErr = err.Error()
@@ -267,6 +271,12 @@ func (s *Store) ListAudits() []domain.AuditEvent {
 		return audits[i].Timestamp.After(audits[j].Timestamp)
 	})
 	return audits
+}
+
+func (s *Store) AuditChain() AuditChainSnapshot {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.auditChainSnapshotLocked()
 }
 
 func (s *Store) ListAssets() []domain.Asset {

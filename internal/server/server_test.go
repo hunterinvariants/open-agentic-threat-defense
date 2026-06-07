@@ -82,6 +82,59 @@ func TestHealthAndReadyEndpoints(t *testing.T) {
 	}
 }
 
+func TestAuditChainEndpointReturnsSnapshot(t *testing.T) {
+	app, err := NewWithOptions(Options{APIToken: "secret"})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+
+	auditReq := httptest.NewRequest(http.MethodGet, "/api/audit/chain", nil)
+	auditReq.Header.Set("Authorization", "Bearer secret")
+	auditRec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(auditRec, auditReq)
+	if auditRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", auditRec.Code)
+	}
+	var snapshot map[string]any
+	if err := json.Unmarshal(auditRec.Body.Bytes(), &snapshot); err != nil {
+		t.Fatalf("decode chain snapshot: %v", err)
+	}
+	if _, ok := snapshot["valid"]; !ok {
+		t.Fatalf("expected chain validity in response: %#v", snapshot)
+	}
+}
+
+func TestGatewayProxyForwardsAllowedToolCall(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer upstream.Close()
+
+	app, err := NewWithOptions(Options{
+		Users: []auth.UserConfig{{
+			Name:      "operator",
+			TokenHash: auth.HashToken("secret"),
+			Roles:     []string{auth.RoleOperator},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+
+	body := `{"upstream_url":"` + upstream.URL + `","tool_call":{"asset_id":"asset-1","actor":"agent-1","tool_name":"asset_inventory","command":"list"}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/proxy", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected upstream status, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"upstream_body":"{\"ok\":true}"`) {
+		t.Fatalf("expected upstream body in response, got %s", rec.Body.String())
+	}
+}
+
 func TestRBACRequiresTokenForReadWhenUsersConfigured(t *testing.T) {
 	app, err := NewWithOptions(Options{
 		Users: []auth.UserConfig{{Name: "viewer", TokenHash: auth.HashToken("view-token"), Roles: []string{auth.RoleViewer}}},

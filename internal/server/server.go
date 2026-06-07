@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,7 +9,9 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -33,6 +36,10 @@ type App struct {
 	webDir          string
 	auth            *auth.Authenticator
 	trustedProxies  []*net.IPNet
+	gatewayLimiter  chan struct{}
+	gatewayMu       sync.Mutex
+	gatewaySamples  []time.Duration
+	gatewayRejected int
 	webhook         exporter.Webhook
 	ticketWebhook   exporter.Webhook
 	responseWebhook exporter.Webhook
@@ -51,6 +58,7 @@ type Options struct {
 	Users                []auth.UserConfig
 	Policy               policy.Config
 	CorrelationWindow    time.Duration
+	ThreatPackPath       string
 	AlertWebhookURL      string
 	AlertWebhookToken    string
 	TicketWebhookURL     string
@@ -65,6 +73,7 @@ type Options struct {
 	GitHubWorkflowRef    string
 	TrustedProxies       []string
 	RetentionWindow      time.Duration
+	GatewayMaxInFlight   int
 }
 
 func New(webDir string) *App {
@@ -102,6 +111,10 @@ func NewWithOptions(options Options) (*App, error) {
 	if err := st.SetRetention(options.RetentionWindow); err != nil {
 		return nil, err
 	}
+	gatewayLimit := options.GatewayMaxInFlight
+	if gatewayLimit <= 0 {
+		gatewayLimit = 64
+	}
 	return &App{
 		store:          st,
 		policy:         policy.New(options.Policy),
@@ -110,6 +123,7 @@ func NewWithOptions(options Options) (*App, error) {
 		webDir:         options.WebDir,
 		auth:           auth.New(options.Users, options.APIToken),
 		trustedProxies: trustedProxies,
+		gatewayLimiter: make(chan struct{}, gatewayLimit),
 		webhook: exporter.Webhook{
 			URL:   options.AlertWebhookURL,
 			Token: options.AlertWebhookToken,
@@ -148,10 +162,12 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("/api/alerts", a.handleAlerts)
 	mux.HandleFunc("/api/assets", a.handleAssets)
 	mux.HandleFunc("/api/audit", a.handleAudit)
+	mux.HandleFunc("/api/audit/chain", a.handleAuditChain)
 	mux.HandleFunc("/api/responses/approve", a.handleResponseApproval)
 	mux.HandleFunc("/api/responses", a.handleResponses)
 	mux.HandleFunc("/api/policies", a.handlePolicies)
 	mux.HandleFunc("/api/demo", a.handleDemo)
+	mux.HandleFunc("/api/gateway/proxy", a.handleGatewayProxy)
 	mux.Handle("/", a.staticHandler())
 	return withSecurityHeaders(a.withAuth(mux))
 }
@@ -179,6 +195,10 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {
 		AssetCount:       assets,
 		ActionCount:      actions,
 		AuditCount:       audits,
+		GatewayInFlight:  a.gatewayInFlight(),
+		GatewayLimit:     cap(a.gatewayLimiter),
+		GatewayRejected:  a.gatewayRejectedCount(),
+		GatewayP99Millis: int(a.gatewayP99().Milliseconds()),
 		StartedAt:        a.startedAt,
 		StorageMode:      a.store.PersistenceMode(),
 		StoragePath:      a.store.PersistencePath(),
@@ -225,8 +245,9 @@ func (a *App) handleSession(w http.ResponseWriter, r *http.Request) {
 				"authenticated": true,
 				"mode":          "open",
 				"principal": auth.Principal{
-					Name:  "anonymous",
-					Roles: []string{auth.RoleAdmin},
+					Name:   "anonymous",
+					Tenant: "default",
+					Roles:  []string{auth.RoleAdmin},
 				},
 			})
 			return
@@ -257,8 +278,9 @@ func (a *App) handleSession(w http.ResponseWriter, r *http.Request) {
 				"authenticated": true,
 				"mode":          "open",
 				"principal": auth.Principal{
-					Name:  "anonymous",
-					Roles: []string{auth.RoleAdmin},
+					Name:   "anonymous",
+					Tenant: "default",
+					Roles:  []string{auth.RoleAdmin},
 				},
 			})
 			return
@@ -362,6 +384,13 @@ func (a *App) handleGatewayDecision(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
+	release, ok := a.gatewayCriticalStart(w)
+	if !ok {
+		return
+	}
+	defer release()
+	start := time.Now()
+	defer func() { a.recordGatewayLatency(time.Since(start)) }()
 	var req domain.ToolCallRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -418,6 +447,13 @@ func (a *App) handleGatewayExecute(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
+	release, ok := a.gatewayCriticalStart(w)
+	if !ok {
+		return
+	}
+	defer release()
+	start := time.Now()
+	defer func() { a.recordGatewayLatency(time.Since(start)) }()
 	var req domain.ToolCallRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -511,6 +547,171 @@ func (a *App) handleGatewayExecute(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (a *App) handleGatewayProxy(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w)
+		return
+	}
+	release, ok := a.gatewayCriticalStart(w)
+	if !ok {
+		return
+	}
+	defer release()
+	start := time.Now()
+	defer func() { a.recordGatewayLatency(time.Since(start)) }()
+
+	var req struct {
+		UpstreamURL string                 `json:"upstream_url"`
+		Body        json.RawMessage        `json:"body,omitempty"`
+		Headers     map[string]string      `json:"headers,omitempty"`
+		ToolCall    domain.ToolCallRequest `json:"tool_call"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if strings.TrimSpace(req.UpstreamURL) == "" {
+		writeError(w, http.StatusBadRequest, errors.New("upstream_url is required"))
+		return
+	}
+	parsedUpstream, err := url.Parse(req.UpstreamURL)
+	if err != nil || parsedUpstream.Scheme == "" || parsedUpstream.Host == "" {
+		writeError(w, http.StatusBadRequest, errors.New("upstream_url must be a valid URL"))
+		return
+	}
+	if req.ToolCall.ToolName == "" {
+		req.ToolCall.ToolName = "proxy_forward"
+	}
+	req.ToolCall.Destination = req.UpstreamURL
+	a.prepareToolCallRequest(&req.ToolCall)
+
+	decision := a.policy.GateToolCall(req.ToolCall)
+	a.prepareAlerts(decision.Alerts)
+	added, err := a.store.AddAlerts(decision.Alerts)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	decision.Alerts = added
+	decision.RecommendedActions = a.recommendedActionsForAlerts(added)
+	principal := principalFromRequest(r)
+
+	switch decision.Verdict {
+	case domain.GatewayAllow:
+		payload := req.Body
+		if len(payload) == 0 {
+			payload, err = json.Marshal(req.ToolCall)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err)
+				return
+			}
+		}
+		upstreamReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, parsedUpstream.String(), bytes.NewReader(payload))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		for key, value := range req.Headers {
+			if key == "" || value == "" {
+				continue
+			}
+			upstreamReq.Header.Set(key, value)
+		}
+		if upstreamReq.Header.Get("Content-Type") == "" {
+			upstreamReq.Header.Set("Content-Type", "application/json")
+		}
+		upstreamReq.Header.Set("X-OATD-Decision", string(decision.Verdict))
+		upstreamReq.Header.Set("X-OATD-Tool", decision.ToolName)
+		upstreamReq.Header.Set("X-OATD-Request-ID", decision.RequestID)
+		client := &http.Client{Timeout: 15 * time.Second}
+		upstreamResp, err := client.Do(upstreamReq)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, err)
+			return
+		}
+		defer upstreamResp.Body.Close()
+		body, err := io.ReadAll(upstreamResp.Body)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, err)
+			return
+		}
+		action := a.gatewayActionFromDecision(req.ToolCall, decision, "not_required", "executed")
+		action.Type = "gateway_proxy"
+		action.Metadata["proxy_upstream_url"] = req.UpstreamURL
+		action.Metadata["proxy_upstream_status"] = fmt.Sprintf("%d", upstreamResp.StatusCode)
+		action.Metadata["proxy_content_type"] = upstreamResp.Header.Get("Content-Type")
+		a.prepareAction(&action)
+		if err := a.store.AddActions([]domain.ResponseAction{action}); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		a.recordAudit(r, principal, "gateway.proxy", "tool_call", decision.RequestID, "executed", map[string]string{
+			"tool":        decision.ToolName,
+			"asset_id":    req.ToolCall.AssetID,
+			"hostname":    req.ToolCall.Hostname,
+			"risk":        string(decision.Risk),
+			"reason":      decision.Reason,
+			"destination": req.UpstreamURL,
+			"action_id":   decisionActionID(&action),
+			"status":      fmt.Sprintf("%d", upstreamResp.StatusCode),
+		})
+		writeJSON(w, upstreamResp.StatusCode, map[string]any{
+			"decision":        decision,
+			"upstream_status": upstreamResp.StatusCode,
+			"upstream_body":   string(body),
+			"action":          action,
+		})
+	case domain.GatewayRequireApproval:
+		action := a.gatewayActionFromDecision(req.ToolCall, decision, "required", "")
+		action.Type = "gateway_proxy"
+		action.Metadata["proxy_upstream_url"] = req.UpstreamURL
+		a.prepareAction(&action)
+		if err := a.store.AddActions([]domain.ResponseAction{action}); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		decision.Action = &action
+		a.recordAudit(r, principal, "gateway.proxy", "tool_call", decision.RequestID, "pending_approval", map[string]string{
+			"tool":        decision.ToolName,
+			"asset_id":    req.ToolCall.AssetID,
+			"hostname":    req.ToolCall.Hostname,
+			"risk":        string(decision.Risk),
+			"reason":      decision.Reason,
+			"destination": req.UpstreamURL,
+			"action_id":   decisionActionID(decision.Action),
+		})
+		writeJSON(w, http.StatusAccepted, map[string]any{
+			"decision": decision,
+			"action":   action,
+		})
+	case domain.GatewayDeny:
+		action := a.gatewayActionFromDecision(req.ToolCall, decision, "not_required", "blocked")
+		action.Type = "gateway_proxy"
+		action.Metadata["proxy_upstream_url"] = req.UpstreamURL
+		a.prepareAction(&action)
+		if err := a.store.AddActions([]domain.ResponseAction{action}); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		decision.Action = &action
+		a.recordAudit(r, principal, "gateway.proxy", "tool_call", decision.RequestID, "blocked", map[string]string{
+			"tool":        decision.ToolName,
+			"asset_id":    req.ToolCall.AssetID,
+			"hostname":    req.ToolCall.Hostname,
+			"risk":        string(decision.Risk),
+			"reason":      decision.Reason,
+			"destination": req.UpstreamURL,
+			"action_id":   decisionActionID(decision.Action),
+		})
+		writeJSON(w, http.StatusForbidden, map[string]any{
+			"decision": decision,
+			"action":   action,
+		})
+	default:
+		writeError(w, http.StatusInternalServerError, errors.New("unknown gateway verdict"))
+	}
+}
+
 func (a *App) handleGatewayQueue(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		methodNotAllowed(w)
@@ -564,6 +765,14 @@ func (a *App) handleAudit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, a.store.ListAudits())
 }
 
+func (a *App) handleAuditChain(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	writeJSON(w, http.StatusOK, a.store.AuditChain())
+}
+
 func (a *App) handlePolicies(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		methodNotAllowed(w)
@@ -577,6 +786,13 @@ func (a *App) handleResponseApproval(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
+	release, ok := a.gatewayCriticalStart(w)
+	if !ok {
+		return
+	}
+	defer release()
+	start := time.Now()
+	defer func() { a.recordGatewayLatency(time.Since(start)) }()
 	var req struct {
 		ActionID   string `json:"action_id"`
 		ApprovedBy string `json:"approved_by"`
@@ -1021,12 +1237,79 @@ func (a *App) nextID(prefix string) string {
 	return fmt.Sprintf("%s-%d", prefix, a.counter.Add(1))
 }
 
+func (a *App) gatewayCriticalStart(w http.ResponseWriter) (func(), bool) {
+	if a.gatewayLimiter == nil {
+		return func() {}, true
+	}
+	select {
+	case a.gatewayLimiter <- struct{}{}:
+		return func() {
+			<-a.gatewayLimiter
+		}, true
+	default:
+		a.gatewayMu.Lock()
+		a.gatewayRejected++
+		a.gatewayMu.Unlock()
+		w.Header().Set("Retry-After", "1")
+		writeError(w, http.StatusTooManyRequests, errors.New("gateway is saturated"))
+		return nil, false
+	}
+}
+
+func (a *App) gatewayInFlight() int {
+	if a.gatewayLimiter == nil {
+		return 0
+	}
+	return len(a.gatewayLimiter)
+}
+
+func (a *App) gatewayRejectedCount() int {
+	a.gatewayMu.Lock()
+	defer a.gatewayMu.Unlock()
+	return a.gatewayRejected
+}
+
+func (a *App) recordGatewayLatency(duration time.Duration) {
+	if duration <= 0 {
+		return
+	}
+	a.gatewayMu.Lock()
+	defer a.gatewayMu.Unlock()
+	a.gatewaySamples = append(a.gatewaySamples, duration)
+	if len(a.gatewaySamples) > 256 {
+		a.gatewaySamples = append([]time.Duration(nil), a.gatewaySamples[len(a.gatewaySamples)-256:]...)
+	}
+}
+
+func (a *App) gatewayP99() time.Duration {
+	a.gatewayMu.Lock()
+	defer a.gatewayMu.Unlock()
+	if len(a.gatewaySamples) == 0 {
+		return 0
+	}
+	samples := append([]time.Duration(nil), a.gatewaySamples...)
+	sort.Slice(samples, func(i, j int) bool {
+		return samples[i] < samples[j]
+	})
+	idx := int(float64(len(samples)-1) * 0.99)
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= len(samples) {
+		idx = len(samples) - 1
+	}
+	return samples[idx]
+}
+
 func (a *App) recordAudit(r *http.Request, principal auth.Principal, action string, resourceType string, resourceID string, outcome string, metadata map[string]string) {
 	if metadata == nil {
 		metadata = make(map[string]string)
 	}
 	if principal.Name == "" {
 		principal.Name = "anonymous"
+	}
+	if principal.Tenant != "" {
+		metadata["tenant"] = principal.Tenant
 	}
 	event := domain.AuditEvent{
 		ID:           a.nextID("aud"),

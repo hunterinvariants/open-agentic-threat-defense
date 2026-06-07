@@ -83,6 +83,18 @@ func TestEvaluateAllowsConfiguredEgressHost(t *testing.T) {
 	}
 }
 
+func TestRulesIncludeThreatPackMetadata(t *testing.T) {
+	engine := NewDefault()
+
+	rules := engine.Rules()
+	if len(rules) == 0 {
+		t.Fatal("expected rules")
+	}
+	if rules[0].PackName == "" || rules[0].PackVersion == "" {
+		t.Fatalf("expected pack metadata, got %#v", rules[0])
+	}
+}
+
 func TestGateToolCallAllowsApprovedTool(t *testing.T) {
 	engine := NewDefault()
 

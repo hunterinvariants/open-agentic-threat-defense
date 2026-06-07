@@ -14,10 +14,11 @@ malware behavior, or autonomous propagation. Demo data generates telemetry only.
 - Go HTTP service with Postgres persistence for production and JSON snapshot
   fallback for local development.
 - Policy engine for agent-tool abuse, taint-aware source-to-sink flow,
-  secret exposure, unexpected egress, discovery behavior, deception hits, and
-  suspicious model runtime activity.
+  secret exposure, unexpected egress, discovery behavior, deception hits,
+  suspicious model runtime activity, and versioned threat-pack content.
 - Inline tool-call PEP for enforce-before-execute decisions at the tool
   boundary, backed by a separate PDP endpoint for diagnostics.
+- Gateway queue, approval polling, and a transport proxy for tool backends.
 - Correlator for multi-signal sequences such as discovery, credential touch,
   agent tool call, and outbound flow.
 - Dry-run response planner for host isolation, egress blocking, tool disabling,
@@ -33,6 +34,7 @@ malware behavior, or autonomous propagation. Demo data generates telemetry only.
 - Browser dashboard with asset risk graph, alerts, events, rules, and response
   actions, plus session-based dashboard login.
 - Alert webhook export for SIEM-style integrations.
+- Tamper-evident audit chaining and an audit chain endpoint for validation.
 - GitHub issue creation for incident tickets and GitHub workflow dispatch for
   approval-gated response execution.
 - systemd and Windows service starter packaging.
@@ -171,6 +173,7 @@ Useful endpoints:
 - `GET /api/status`
 - `POST /api/gateway/decide`
 - `POST /api/gateway/execute`
+- `POST /api/gateway/proxy`
 - `GET /api/gateway/queue`
 - `GET /api/gateway/actions/{id}`
 - `GET /api/events`
@@ -178,6 +181,7 @@ Useful endpoints:
 - `GET /api/alerts`
 - `GET /api/assets`
 - `GET /api/audit`
+- `GET /api/audit/chain`
 - `GET /api/policies`
 - `GET /api/responses`
 - `POST /api/responses`
@@ -224,6 +228,7 @@ The policy file is JSON:
 {
   "approved_tools": ["asset_inventory", "ticket_create", "policy_read", "siem_search"],
   "approved_egress_hosts": ["api.openai.com", "github.com", "login.microsoftonline.com"],
+  "threat_pack_path": "configs\\example.threat-pack.json",
   "correlation_window": "30m",
   "users": [
     {
@@ -253,6 +258,9 @@ Roles:
 - `admin`: all API operations.
 
 Audit logs require `analyst`, `operator`, or `admin`.
+The inline gateway and proxy path enforce a bounded in-flight limit to apply
+backpressure on the critical decision path; configure it with
+`--gateway-max-in-flight` or `OATD_GATEWAY_MAX_IN_FLIGHT`.
 
 ## Telemetry Replay
 

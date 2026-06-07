@@ -67,6 +67,8 @@ portable Postgres backups.
 
 Approved agent tools and egress hosts are configurable through `--policy`.
 If no policy file is supplied, the built-in defaults are used.
+The policy engine is packaged as a versioned threat pack so rule content and
+allowlists can evolve together.
 
 ### Inline Gateway
 
@@ -94,6 +96,13 @@ rest of the response workflow. The `oadtdctl wedge-demo` command exercises the
 full sequence end to end. `GET /api/gateway/queue` lists pending gateway
 actions and `GET /api/gateway/actions/{id}` exposes the live approval state for
 polling or console workflows.
+
+`POST /api/gateway/proxy` adds a transport proxy path for tool backends. It
+evaluates the proposed call inline, then forwards the payload to a configured
+upstream only when the policy verdict allows it.
+
+The gateway path is bounded by a configurable in-flight limit so the critical
+decision path can apply backpressure instead of accepting unbounded load.
 
 ### Correlator
 
@@ -138,7 +147,9 @@ The legacy `--api-token` path behaves as an admin token for compatibility.
 The HTTP layer records audit events for authentication failures, RBAC denials,
 event ingestion, demo loads, response planning, and response approvals. Audit
 events are first-class store records and are persisted to Postgres table
-`oatd_audit_events` in production mode.
+`oatd_audit_events` in production mode. Each audit record is chained to the
+previous one with a SHA-256 hash so tampering becomes visible on readback.
+`GET /api/audit/chain` exposes the current chain state.
 
 ### SIEM/Webhook Export
 

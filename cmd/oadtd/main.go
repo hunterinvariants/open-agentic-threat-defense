@@ -25,6 +25,7 @@ func main() {
 	postgresDSN := flag.String("postgres-dsn", os.Getenv("OATD_POSTGRES_DSN"), "Postgres DSN for production persistence")
 	policyPath := flag.String("policy", "", "optional JSON policy configuration path")
 	apiToken := flag.String("api-token", os.Getenv("OATD_API_TOKEN"), "optional API token for write endpoints")
+	threatPackPath := flag.String("threat-pack", os.Getenv("OATD_THREAT_PACK"), "optional threat pack JSON file")
 	alertWebhookURL := flag.String("alert-webhook-url", os.Getenv("OATD_ALERT_WEBHOOK_URL"), "optional SIEM/webhook URL for new alerts")
 	alertWebhookToken := flag.String("alert-webhook-token", os.Getenv("OATD_ALERT_WEBHOOK_TOKEN"), "optional bearer token for alert webhook")
 	ticketWebhookURL := flag.String("ticket-webhook-url", os.Getenv("OATD_TICKET_WEBHOOK_URL"), "optional webhook URL for incident ticket creation")
@@ -39,6 +40,7 @@ func main() {
 	githubWorkflowRef := flag.String("github-workflow-ref", os.Getenv("OATD_GITHUB_WORKFLOW_REF"), "GitHub ref for workflow dispatch")
 	trustedProxies := flag.String("trusted-proxies", os.Getenv("OATD_TRUSTED_PROXIES"), "comma-separated list of trusted proxy CIDRs or IPs")
 	retentionWindow := flag.String("retention-window", defaultString(os.Getenv("OATD_RETENTION_WINDOW"), "30d"), "retention window for events, alerts, actions, and audits")
+	gatewayMaxInFlight := flag.Int("gateway-max-in-flight", defaultIntEnv(os.Getenv("OATD_GATEWAY_MAX_IN_FLIGHT"), 64), "max in-flight gateway operations before backpressure")
 	insecure := flag.Bool("insecure", parseBoolEnv(os.Getenv("OATD_INSECURE")), "allow open mode on non-loopback listen addresses")
 	withDemo := flag.Bool("demo", false, "load safe demo telemetry at startup")
 	flag.Parse()
@@ -47,10 +49,17 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	if value := strings.TrimSpace(*threatPackPath); value != "" {
+		runtimeConfig.ThreatPackPath = value
+	}
 	if err := server.ValidateListenAddress(*addr, len(runtimeConfig.Users) > 0 || strings.TrimSpace(*apiToken) != "", *insecure); err != nil {
 		log.Fatal(err)
 	}
 	window, err := runtimeConfig.CorrelationWindowDuration()
+	if err != nil {
+		log.Fatal(err)
+	}
+	policyConfig, err := runtimeConfig.PolicyConfig()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -65,8 +74,9 @@ func main() {
 		PostgresDSN:          *postgresDSN,
 		APIToken:             *apiToken,
 		Users:                runtimeConfig.Users,
-		Policy:               runtimeConfig.PolicyConfig(),
+		Policy:               policyConfig,
 		CorrelationWindow:    window,
+		ThreatPackPath:       strings.TrimSpace(*threatPackPath),
 		AlertWebhookURL:      *alertWebhookURL,
 		AlertWebhookToken:    *alertWebhookToken,
 		TicketWebhookURL:     *ticketWebhookURL,
@@ -81,6 +91,7 @@ func main() {
 		GitHubWorkflowRef:    *githubWorkflowRef,
 		TrustedProxies:       splitCSV(*trustedProxies),
 		RetentionWindow:      retention,
+		GatewayMaxInFlight:   *gatewayMaxInFlight,
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -144,6 +155,17 @@ func defaultString(value string, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func defaultIntEnv(value string, fallback int) int {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }
 
 func parseBoolEnv(value string) bool {

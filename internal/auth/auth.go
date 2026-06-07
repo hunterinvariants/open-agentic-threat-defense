@@ -23,13 +23,15 @@ const (
 
 type UserConfig struct {
 	Name      string   `json:"name"`
+	Tenant    string   `json:"tenant,omitempty"`
 	TokenHash string   `json:"token_sha256"`
 	Roles     []string `json:"roles"`
 }
 
 type Principal struct {
-	Name  string   `json:"name"`
-	Roles []string `json:"roles"`
+	Name   string   `json:"name"`
+	Tenant string   `json:"tenant,omitempty"`
+	Roles  []string `json:"roles"`
 }
 
 type SessionInfo struct {
@@ -239,10 +241,16 @@ func RequiredRoles(method string, path string) []string {
 	if path == "/api/audit" {
 		return []string{RoleAnalyst, RoleOperator}
 	}
+	if path == "/api/audit/chain" {
+		return []string{RoleAnalyst, RoleOperator}
+	}
 	if path == "/api/gateway/decide" {
 		return []string{RoleIngestor, RoleAnalyst, RoleOperator}
 	}
 	if path == "/api/gateway/execute" {
+		return []string{RoleIngestor, RoleAnalyst, RoleOperator}
+	}
+	if path == "/api/gateway/proxy" {
 		return []string{RoleIngestor, RoleAnalyst, RoleOperator}
 	}
 	if path == "/api/gateway/queue" || strings.HasPrefix(path, "/api/gateway/actions/") {
@@ -267,6 +275,10 @@ func normalizeUsers(users []UserConfig) []UserConfig {
 	normalized := make([]UserConfig, 0, len(users))
 	for _, user := range users {
 		user.Name = strings.TrimSpace(user.Name)
+		user.Tenant = strings.TrimSpace(user.Tenant)
+		if user.Tenant == "" {
+			user.Tenant = "default"
+		}
 		user.TokenHash = strings.ToLower(strings.TrimSpace(user.TokenHash))
 		if user.Name == "" || user.TokenHash == "" {
 			continue
@@ -316,11 +328,11 @@ func (a *Authenticator) principalForCredentials(username string, token string) (
 func (a *Authenticator) principalForToken(tokenHash string) (Principal, bool) {
 	for _, user := range a.users {
 		if constantTimeEqual(tokenHash, user.TokenHash) {
-			return Principal{Name: user.Name, Roles: user.Roles}, true
+			return Principal{Name: user.Name, Tenant: user.Tenant, Roles: user.Roles}, true
 		}
 	}
 	if a.legacyHash != "" && constantTimeEqual(tokenHash, a.legacyHash) {
-		return Principal{Name: "legacy-token", Roles: []string{RoleAdmin}}, true
+		return Principal{Name: "legacy-token", Tenant: "default", Roles: []string{RoleAdmin}}, true
 	}
 	return Principal{}, false
 }

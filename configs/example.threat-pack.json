@@ -1,0 +1,31 @@
+{
+  "name": "builtin",
+  "version": "2026.06",
+  "approved_tools": [
+    "asset_inventory",
+    "ticket_create",
+    "policy_read",
+    "siem_search"
+  ],
+  "approved_egress_hosts": [
+    "api.openai.com",
+    "github.com",
+    "login.microsoftonline.com"
+  ],
+  "rules": [
+    {
+      "id": "agent.tool.unapproved",
+      "name": "Unapproved agent tool call",
+      "description": "Flags AI-agent or MCP tool calls outside the approved tool manifest.",
+      "severity": "high",
+      "signals": ["agent_tool_call", "tool_manifest"]
+    },
+    {
+      "id": "agent.secret.exposure",
+      "name": "Potential secret exposure through agent context",
+      "description": "Flags commands and tool calls that combine agent activity with token, secret, or environment access.",
+      "severity": "critical",
+      "signals": ["agent_tool_call", "secret", "token", "environment"]
+    }
+  ]
+}

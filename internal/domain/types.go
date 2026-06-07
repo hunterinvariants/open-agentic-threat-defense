@@ -154,6 +154,9 @@ type Asset struct {
 type AuditEvent struct {
 	ID           string            `json:"id"`
 	Timestamp    time.Time         `json:"timestamp"`
+	ChainIndex   int               `json:"chain_index,omitempty"`
+	PrevHash     string            `json:"prev_hash,omitempty"`
+	Hash         string            `json:"hash,omitempty"`
 	Actor        string            `json:"actor"`
 	Roles        []string          `json:"roles"`
 	Action       string            `json:"action"`
@@ -171,6 +174,8 @@ type RuleDescriptor struct {
 	Description string   `json:"description"`
 	Severity    Severity `json:"severity"`
 	Signals     []string `json:"signals"`
+	PackName    string   `json:"pack_name,omitempty"`
+	PackVersion string   `json:"pack_version,omitempty"`
 }
 
 type Status struct {
@@ -181,6 +186,10 @@ type Status struct {
 	AssetCount       int       `json:"asset_count"`
 	ActionCount      int       `json:"action_count"`
 	AuditCount       int       `json:"audit_count"`
+	GatewayInFlight  int       `json:"gateway_inflight,omitempty"`
+	GatewayLimit     int       `json:"gateway_limit,omitempty"`
+	GatewayRejected  int       `json:"gateway_rejected,omitempty"`
+	GatewayP99Millis int       `json:"gateway_p99_millis,omitempty"`
 	StartedAt        time.Time `json:"started_at"`
 	StorageMode      string    `json:"storage_mode"`
 	StoragePath      string    `json:"storage_path,omitempty"`

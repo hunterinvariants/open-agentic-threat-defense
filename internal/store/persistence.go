@@ -58,6 +58,7 @@ func NewWithPath(path string) (*Store, error) {
 		s.rebuildAssetsLocked()
 	}
 	s.rebuildFingerprintsLocked()
+	s.rebuildAuditChainLocked()
 	return s, nil
 }
 

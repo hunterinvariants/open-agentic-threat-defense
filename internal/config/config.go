@@ -16,6 +16,7 @@ type Config struct {
 	ApprovedTools       []string          `json:"approved_tools"`
 	ApprovedEgressHosts []string          `json:"approved_egress_hosts"`
 	CorrelationWindow   string            `json:"correlation_window"`
+	ThreatPackPath      string            `json:"threat_pack_path"`
 	Users               []auth.UserConfig `json:"users"`
 }
 
@@ -37,11 +38,20 @@ func Load(path string) (Config, error) {
 	return config, nil
 }
 
-func (c Config) PolicyConfig() policy.Config {
-	return policy.Config{
-		ApprovedTools:       c.ApprovedTools,
-		ApprovedEgressHosts: c.ApprovedEgressHosts,
+func (c Config) PolicyConfig() (policy.Config, error) {
+	pack, err := policy.LoadThreatPack(c.ThreatPackPath)
+	if err != nil {
+		return policy.Config{}, err
 	}
+	if len(c.ApprovedTools) > 0 {
+		pack.ApprovedTools = append([]string(nil), c.ApprovedTools...)
+	}
+	if len(c.ApprovedEgressHosts) > 0 {
+		pack.ApprovedEgressHosts = append([]string(nil), c.ApprovedEgressHosts...)
+	}
+	return policy.Config{
+		ThreatPack: pack,
+	}, nil
 }
 
 func (c Config) CorrelationWindowDuration() (time.Duration, error) {
