@@ -262,6 +262,13 @@ The inline gateway and proxy path enforce a bounded in-flight limit to apply
 backpressure on the critical decision path; configure it with
 `--gateway-max-in-flight` or `OATD_GATEWAY_MAX_IN_FLIGHT`.
 
+The MCP reverse-proxy path is enabled by setting:
+
+```text
+--mcp-upstream-url    upstream MCP server URL
+--mcp-upstream-token  optional bearer token for the upstream
+```
+
 ## Telemetry Replay
 
 `oadtdctl replay` reads newline-delimited JSON events and posts them to

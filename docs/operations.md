@@ -264,6 +264,10 @@ Set `--gateway-max-in-flight` or `OATD_GATEWAY_MAX_IN_FLIGHT` to control
 backpressure. `POST /api/gateway/proxy` forwards tool payloads to configured
 upstreams only after the gate allows them.
 
+The transparent MCP proxy uses `--mcp-upstream-url` and optional
+`--mcp-upstream-token` to forward JSON-RPC MCP traffic through OADTD while the
+gate inspects tool-like calls inline.
+
 ## RBAC
 
 Define users in the policy file with token hashes:

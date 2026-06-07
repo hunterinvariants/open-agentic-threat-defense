@@ -38,6 +38,8 @@ func main() {
 	githubToken := flag.String("github-token", os.Getenv("OATD_GITHUB_TOKEN"), "GitHub token for issue and workflow integrations")
 	githubWorkflowFile := flag.String("github-workflow-file", os.Getenv("OATD_GITHUB_WORKFLOW_FILE"), "GitHub workflow file for approved response actions")
 	githubWorkflowRef := flag.String("github-workflow-ref", os.Getenv("OATD_GITHUB_WORKFLOW_REF"), "GitHub ref for workflow dispatch")
+	mcpUpstreamURL := flag.String("mcp-upstream-url", os.Getenv("OATD_MCP_UPSTREAM_URL"), "upstream MCP server URL for transparent interception")
+	mcpUpstreamToken := flag.String("mcp-upstream-token", os.Getenv("OATD_MCP_UPSTREAM_TOKEN"), "optional bearer token for MCP upstream")
 	trustedProxies := flag.String("trusted-proxies", os.Getenv("OATD_TRUSTED_PROXIES"), "comma-separated list of trusted proxy CIDRs or IPs")
 	retentionWindow := flag.String("retention-window", defaultString(os.Getenv("OATD_RETENTION_WINDOW"), "30d"), "retention window for events, alerts, actions, and audits")
 	gatewayMaxInFlight := flag.Int("gateway-max-in-flight", defaultIntEnv(os.Getenv("OATD_GATEWAY_MAX_IN_FLIGHT"), 64), "max in-flight gateway operations before backpressure")
@@ -89,6 +91,8 @@ func main() {
 		GitHubToken:          *githubToken,
 		GitHubWorkflowFile:   *githubWorkflowFile,
 		GitHubWorkflowRef:    *githubWorkflowRef,
+		MCPUpstreamURL:       *mcpUpstreamURL,
+		MCPUpstreamToken:     *mcpUpstreamToken,
 		TrustedProxies:       splitCSV(*trustedProxies),
 		RetentionWindow:      retention,
 		GatewayMaxInFlight:   *gatewayMaxInFlight,

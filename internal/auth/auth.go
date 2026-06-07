@@ -253,6 +253,9 @@ func RequiredRoles(method string, path string) []string {
 	if path == "/api/gateway/proxy" {
 		return []string{RoleIngestor, RoleAnalyst, RoleOperator}
 	}
+	if path == "/api/mcp/proxy" {
+		return []string{RoleIngestor, RoleAnalyst, RoleOperator}
+	}
 	if path == "/api/gateway/queue" || strings.HasPrefix(path, "/api/gateway/actions/") {
 		return []string{RoleAnalyst, RoleOperator}
 	}

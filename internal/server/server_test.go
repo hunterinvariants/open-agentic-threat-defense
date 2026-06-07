@@ -135,6 +135,72 @@ func TestGatewayProxyForwardsAllowedToolCall(t *testing.T) {
 	}
 }
 
+func TestMCPProxyForwardsAllowedToolsCall(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-OATD-Proxy"); got != "mcp" {
+			t.Fatalf("expected proxy header, got %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"ok":true}}`))
+	}))
+	defer upstream.Close()
+
+	app, err := NewWithOptions(Options{
+		Users: []auth.UserConfig{{
+			Name:      "operator",
+			TokenHash: auth.HashToken("secret"),
+			Roles:     []string{auth.RoleOperator},
+		}},
+		MCPUpstreamURL: upstream.URL,
+	})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/mcp/proxy", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"asset_inventory","arguments":{"asset_id":"a1"}}}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected upstream status, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"result":{"ok":true}`) {
+		t.Fatalf("expected upstream json-rpc result, got %s", rec.Body.String())
+	}
+}
+
+func TestMCPProxyBlocksUnapprovedTool(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"ok":true}}`))
+	}))
+	defer upstream.Close()
+
+	app, err := NewWithOptions(Options{
+		Users: []auth.UserConfig{{
+			Name:      "operator",
+			TokenHash: auth.HashToken("secret"),
+			Roles:     []string{auth.RoleOperator},
+		}},
+		MCPUpstreamURL: upstream.URL,
+	})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/mcp/proxy", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"shell_exec","arguments":{"command":"whoami"}}}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected blocked status, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"approval required"`) && !strings.Contains(rec.Body.String(), `"blocked by policy"`) {
+		t.Fatalf("expected json-rpc error, got %s", rec.Body.String())
+	}
+}
+
 func TestRBACRequiresTokenForReadWhenUsersConfigured(t *testing.T) {
 	app, err := NewWithOptions(Options{
 		Users: []auth.UserConfig{{Name: "viewer", TokenHash: auth.HashToken("view-token"), Roles: []string{auth.RoleViewer}}},

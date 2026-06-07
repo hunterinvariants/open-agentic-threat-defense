@@ -101,6 +101,10 @@ polling or console workflows.
 evaluates the proposed call inline, then forwards the payload to a configured
 upstream only when the policy verdict allows it.
 
+`POST /api/mcp/proxy` is the transparent MCP reverse-proxy surface. It
+forwards JSON-RPC MCP traffic to a configured upstream and intercepts tool-like
+methods inline before forwarding them.
+
 The gateway path is bounded by a configurable in-flight limit so the critical
 decision path can apply backpressure instead of accepting unbounded load.
 

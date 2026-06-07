@@ -29,25 +29,27 @@ import (
 const Version = "0.1.0-mvp"
 
 type App struct {
-	store           *store.Store
-	policy          *policy.Engine
-	correlator      *correlator.Correlator
-	responder       *response.Planner
-	webDir          string
-	auth            *auth.Authenticator
-	trustedProxies  []*net.IPNet
-	gatewayLimiter  chan struct{}
-	gatewayMu       sync.Mutex
-	gatewaySamples  []time.Duration
-	gatewayRejected int
-	webhook         exporter.Webhook
-	ticketWebhook   exporter.Webhook
-	responseWebhook exporter.Webhook
-	github          exporter.GitHub
-	exportMu        sync.RWMutex
-	exportErr       string
-	startedAt       time.Time
-	counter         atomic.Uint64
+	store            *store.Store
+	policy           *policy.Engine
+	correlator       *correlator.Correlator
+	responder        *response.Planner
+	webDir           string
+	auth             *auth.Authenticator
+	trustedProxies   []*net.IPNet
+	gatewayLimiter   chan struct{}
+	gatewayMu        sync.Mutex
+	gatewaySamples   []time.Duration
+	gatewayRejected  int
+	webhook          exporter.Webhook
+	ticketWebhook    exporter.Webhook
+	responseWebhook  exporter.Webhook
+	github           exporter.GitHub
+	mcpUpstreamURL   string
+	mcpUpstreamToken string
+	exportMu         sync.RWMutex
+	exportErr        string
+	startedAt        time.Time
+	counter          atomic.Uint64
 }
 
 type Options struct {
@@ -71,6 +73,8 @@ type Options struct {
 	GitHubToken          string
 	GitHubWorkflowFile   string
 	GitHubWorkflowRef    string
+	MCPUpstreamURL       string
+	MCPUpstreamToken     string
 	TrustedProxies       []string
 	RetentionWindow      time.Duration
 	GatewayMaxInFlight   int
@@ -144,7 +148,9 @@ func NewWithOptions(options Options) (*App, error) {
 			WorkflowFile: options.GitHubWorkflowFile,
 			WorkflowRef:  options.GitHubWorkflowRef,
 		},
-		startedAt: time.Now().UTC(),
+		mcpUpstreamURL:   options.MCPUpstreamURL,
+		mcpUpstreamToken: options.MCPUpstreamToken,
+		startedAt:        time.Now().UTC(),
 	}, nil
 }
 
@@ -168,6 +174,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("/api/policies", a.handlePolicies)
 	mux.HandleFunc("/api/demo", a.handleDemo)
 	mux.HandleFunc("/api/gateway/proxy", a.handleGatewayProxy)
+	mux.HandleFunc("/api/mcp/proxy", a.handleMCPProxy)
 	mux.Handle("/", a.staticHandler())
 	return withSecurityHeaders(a.withAuth(mux))
 }
