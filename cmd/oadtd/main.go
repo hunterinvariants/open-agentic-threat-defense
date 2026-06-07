@@ -111,6 +111,7 @@ func main() {
 		APIToken:                  *apiToken,
 		Users:                     runtimeConfig.Users,
 		Policy:                    policyConfig,
+		PolicyPath:                strings.TrimSpace(*policyPath),
 		CorrelationWindow:         window,
 		ThreatPackPath:            strings.TrimSpace(*threatPackPath),
 		AlertWebhookURL:           *alertWebhookURL,
@@ -181,6 +182,19 @@ func main() {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(stop)
+
+	reload := make(chan os.Signal, 1)
+	signal.Notify(reload, syscall.SIGHUP)
+	defer signal.Stop(reload)
+	go func() {
+		for range reload {
+			if rules, err := app.ReloadPolicy(); err != nil {
+				log.Printf("policy reload failed: %v", err)
+			} else {
+				log.Printf("policy reloaded: %d rules active", rules)
+			}
+		}
+	}()
 
 	go func() {
 		<-stop

@@ -11,6 +11,7 @@ import (
 )
 
 type Engine struct {
+	cfgMu               sync.RWMutex
 	approvedTools       map[string]struct{}
 	approvedEgressHosts map[string]struct{}
 	pack                ThreatPack
@@ -98,7 +99,27 @@ func withDefaults(config Config) Config {
 }
 
 func (e *Engine) Rules() []domain.RuleDescriptor {
+	e.cfgMu.RLock()
+	defer e.cfgMu.RUnlock()
 	return append([]domain.RuleDescriptor(nil), e.pack.Rules...)
+}
+
+func (e *Engine) isToolApproved(tool string) bool {
+	e.cfgMu.RLock()
+	defer e.cfgMu.RUnlock()
+	_, ok := e.approvedTools[tool]
+	return ok
+}
+
+// Reload atomically swaps the detection configuration (approved tools, egress
+// hosts, and threat pack) without a restart. Gateway call history is preserved.
+func (e *Engine) Reload(config Config) {
+	rebuilt := New(config)
+	e.cfgMu.Lock()
+	e.approvedTools = rebuilt.approvedTools
+	e.approvedEgressHosts = rebuilt.approvedEgressHosts
+	e.pack = rebuilt.pack
+	e.cfgMu.Unlock()
 }
 
 func (e *Engine) Evaluate(event domain.Event) []domain.Alert {
@@ -109,7 +130,7 @@ func (e *Engine) Evaluate(event domain.Event) []domain.Alert {
 		if tool == "" {
 			tool = "unknown"
 		}
-		if _, ok := e.approvedTools[tool]; !ok {
+		if !e.isToolApproved(tool) {
 			alerts = append(alerts, newAlert(
 				"agent.tool.unapproved",
 				"Unapproved agent tool call",
@@ -205,6 +226,8 @@ func (e *Engine) isApprovedEgress(destination string) bool {
 	if host == "" {
 		return false
 	}
+	e.cfgMu.RLock()
+	defer e.cfgMu.RUnlock()
 	_, ok := e.approvedEgressHosts[host]
 	return ok
 }

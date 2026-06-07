@@ -22,6 +22,7 @@ import (
 
 	"github.com/crewjam/saml/samlsp"
 	"github.com/open-agentic-threat-defense/oadtd/internal/auth"
+	"github.com/open-agentic-threat-defense/oadtd/internal/config"
 	"github.com/open-agentic-threat-defense/oadtd/internal/correlator"
 	"github.com/open-agentic-threat-defense/oadtd/internal/domain"
 	"github.com/open-agentic-threat-defense/oadtd/internal/exporter"
@@ -38,6 +39,8 @@ type App struct {
 	correlator       *correlator.Correlator
 	responder        *response.Planner
 	webDir           string
+	policyPath       string
+	threatPackPath   string
 	auth             *auth.Authenticator
 	trustedProxies   []*net.IPNet
 	gatewayLimiter   chan struct{}
@@ -70,6 +73,7 @@ type Options struct {
 	Policy                    policy.Config
 	CorrelationWindow         time.Duration
 	ThreatPackPath            string
+	PolicyPath                string
 	AlertWebhookURL           string
 	AlertWebhookToken         string
 	TicketWebhookURL          string
@@ -191,6 +195,8 @@ func NewWithOptions(options Options) (*App, error) {
 		correlator:     correlator.New(options.CorrelationWindow),
 		responder:      response.NewDryRun(),
 		webDir:         options.WebDir,
+		policyPath:     strings.TrimSpace(options.PolicyPath),
+		threatPackPath: strings.TrimSpace(options.ThreatPackPath),
 		auth:           authenticator,
 		trustedProxies: trustedProxies,
 		saml:           samlProvider,
@@ -237,6 +243,7 @@ func (a *App) Routes() http.Handler {
 	mux.Handle("/api/sso/saml/complete", a.requireSAMLAccount(http.HandlerFunc(a.handleSAMLComplete)))
 	mux.HandleFunc("/api/gateway/decide", a.handleGatewayDecision)
 	mux.HandleFunc("/api/gateway/execute", a.handleGatewayExecute)
+	mux.HandleFunc("/api/policy/reload", a.handlePolicyReload)
 	mux.HandleFunc("/api/gateway/queue", a.handleGatewayQueue)
 	mux.HandleFunc("/api/gateway/actions/", a.handleGatewayAction)
 	mux.HandleFunc("/api/events", a.handleEvents)
@@ -1154,6 +1161,44 @@ func (a *App) handlePolicies(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, a.policy.Rules())
+}
+
+func (a *App) handlePolicyReload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w)
+		return
+	}
+	principal := principalFromRequest(r)
+	rules, err := a.ReloadPolicy()
+	if err != nil {
+		a.recordAudit(r, principal, "policy.reload", "policy", "", "failed", map[string]string{"error": err.Error()})
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	a.recordAudit(r, principal, "policy.reload", "policy", "", "accepted", map[string]string{"rules": fmt.Sprintf("%d", rules)})
+	writeJSON(w, http.StatusOK, map[string]any{"reloaded": true, "rules": rules})
+}
+
+// ReloadPolicy re-reads the policy and threat-pack files and atomically swaps
+// the detection configuration without a restart. The correlation window is set
+// at startup and is not hot-reloaded.
+func (a *App) ReloadPolicy() (int, error) {
+	if a.policyPath == "" && a.threatPackPath == "" {
+		return 0, errors.New("no policy or threat-pack file configured to reload")
+	}
+	cfg, err := config.Load(a.policyPath)
+	if err != nil {
+		return 0, err
+	}
+	if a.threatPackPath != "" {
+		cfg.ThreatPackPath = a.threatPackPath
+	}
+	policyCfg, err := cfg.PolicyConfig()
+	if err != nil {
+		return 0, err
+	}
+	a.policy.Reload(policyCfg)
+	return len(a.policy.Rules()), nil
 }
 
 func (a *App) handleResponseApproval(w http.ResponseWriter, r *http.Request) {
