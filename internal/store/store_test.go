@@ -1,12 +1,17 @@
 package store
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/open-agentic-threat-defense/oadtd/internal/domain"
 )
+
+func init() {
+	_ = os.Setenv("OATD_SESSION_SECRET", "test-session-secret")
+}
 
 func TestStorePersistsAndLoadsSnapshot(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")

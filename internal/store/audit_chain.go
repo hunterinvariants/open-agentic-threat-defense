@@ -1,9 +1,11 @@
 package store
 
 import (
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -17,6 +19,8 @@ type AuditChainSnapshot struct {
 	Head          string    `json:"head"`
 	Previous      string    `json:"previous"`
 	Valid         bool      `json:"valid"`
+	Anchor        string    `json:"anchor,omitempty"`
+	Anchored      bool      `json:"anchored,omitempty"`
 	LastAuditID   string    `json:"last_audit_id,omitempty"`
 	LastTimestamp time.Time `json:"last_timestamp,omitempty"`
 }
@@ -27,7 +31,8 @@ func (s *Store) prepareAuditChainLocked(event domain.AuditEvent) domain.AuditEve
 	event.PrevHash = s.auditChainHead
 	event.Hash = auditEventHash(event, event.PrevHash)
 	s.auditChainHead = event.Hash
-	s.auditChainValid = true
+	s.auditChainAnchor = auditChainAnchorValue(event.Hash, event.ChainIndex, true)
+	s.auditChainValid = s.auditChainAnchor != ""
 	return event
 }
 
@@ -56,10 +61,8 @@ func (s *Store) rebuildAuditChainLocked() {
 		head = audit.Hash
 	}
 	s.auditChainHead = head
-	s.auditChainValid = valid
-	if head == "" && total > 0 {
-		s.auditChainValid = false
-	}
+	s.auditChainAnchor = auditChainAnchorValue(head, linked, valid)
+	s.auditChainValid = valid && (total == 0 || s.auditChainAnchor != "")
 }
 
 func (s *Store) auditChainSnapshotLocked() AuditChainSnapshot {
@@ -69,6 +72,8 @@ func (s *Store) auditChainSnapshotLocked() AuditChainSnapshot {
 		Head:     s.auditChainHead,
 		Previous: "",
 		Valid:    s.auditChainValid,
+		Anchor:   s.auditChainAnchor,
+		Anchored: s.auditChainAnchor != "",
 	}
 	for _, audit := range s.audits {
 		if strings.TrimSpace(audit.Hash) == "" {
@@ -83,6 +88,7 @@ func (s *Store) auditChainSnapshotLocked() AuditChainSnapshot {
 	}
 	if snap.Head == "" {
 		snap.Valid = snap.Total == 0
+		snap.Anchored = false
 	}
 	return snap
 }
@@ -127,7 +133,37 @@ func (s *Store) auditChainSnapshotForTenantLocked(tenant string) AuditChainSnaps
 	if snap.Head == "" {
 		snap.Valid = snap.Total == 0
 	}
+	snap.Anchor = auditChainAnchorValue(snap.Head, snap.Linked, snap.Valid)
+	snap.Anchored = snap.Anchor != ""
+	if snap.Total > 0 {
+		snap.Valid = snap.Valid && snap.Anchored
+	}
 	return snap
+}
+
+func auditChainAnchorKey() []byte {
+	secret := strings.TrimSpace(os.Getenv("OATD_AUDIT_HMAC_SECRET"))
+	if secret == "" {
+		secret = strings.TrimSpace(os.Getenv("OATD_SESSION_SECRET"))
+	}
+	if secret == "" {
+		return nil
+	}
+	return []byte(secret)
+}
+
+func auditChainAnchorValue(head string, chainIndex int, valid bool) string {
+	key := auditChainAnchorKey()
+	if len(key) == 0 {
+		return ""
+	}
+	mac := hmac.New(sha256.New, key)
+	_, _ = mac.Write([]byte(head))
+	_, _ = mac.Write([]byte("|"))
+	_, _ = mac.Write([]byte(fmt.Sprintf("%d", chainIndex)))
+	_, _ = mac.Write([]byte("|"))
+	_, _ = mac.Write([]byte(fmt.Sprintf("%t", valid)))
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
 func auditEventHash(event domain.AuditEvent, prevHash string) string {

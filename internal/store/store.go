@@ -12,21 +12,22 @@ import (
 )
 
 type Store struct {
-	mu              sync.RWMutex
-	db              *sql.DB
-	mode            string
-	events          []domain.Event
-	alerts          []domain.Alert
-	actions         []domain.ResponseAction
-	audits          []domain.AuditEvent
-	auditChainHead  string
-	auditChainValid bool
-	assets          map[string]domain.Asset
-	fingerprints    map[string]struct{}
-	path            string
-	lastErr         string
-	schemaVersion   int
-	retentionWindow time.Duration
+	mu               sync.RWMutex
+	db               *sql.DB
+	mode             string
+	events           []domain.Event
+	alerts           []domain.Alert
+	actions          []domain.ResponseAction
+	audits           []domain.AuditEvent
+	auditChainHead   string
+	auditChainValid  bool
+	auditChainAnchor string
+	assets           map[string]domain.Asset
+	fingerprints     map[string]struct{}
+	path             string
+	lastErr          string
+	schemaVersion    int
+	retentionWindow  time.Duration
 }
 
 func New() *Store {

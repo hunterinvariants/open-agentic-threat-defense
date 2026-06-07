@@ -217,6 +217,7 @@ CREATE TABLE IF NOT EXISTS oatd_audit_chain_state (
   head_hash TEXT NOT NULL DEFAULT '',
   chain_index INTEGER NOT NULL DEFAULT 0,
   valid BOOLEAN NOT NULL DEFAULT TRUE,
+  anchor_hmac TEXT NOT NULL DEFAULT '',
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 INSERT INTO oatd_audit_chain_state (id, head_hash, chain_index, valid)
@@ -231,6 +232,13 @@ CREATE TABLE IF NOT EXISTS oatd_login_attempts (
 );
 CREATE INDEX IF NOT EXISTS idx_oatd_login_attempts_blocked_until ON oatd_login_attempts (blocked_until DESC);
 CREATE INDEX IF NOT EXISTS idx_oatd_login_attempts_last_seen ON oatd_login_attempts (last_seen DESC);`,
+	},
+	{
+		Version: 3,
+		Name:    "audit_chain_anchor_hmac",
+		SQL: `
+ALTER TABLE oatd_audit_chain_state
+ADD COLUMN IF NOT EXISTS anchor_hmac TEXT NOT NULL DEFAULT '';`,
 	},
 }
 
@@ -369,13 +377,14 @@ func (s *Store) postgresSyncAuditChainState(ctx context.Context) error {
 	}
 	if _, err := s.db.ExecContext(ctx, `
 INSERT INTO oatd_audit_chain_state (id, head_hash, chain_index, valid, updated_at)
-VALUES (1, $1, $2, $3, now())
+VALUES (1, $1, $2, $3, $4, now())
 ON CONFLICT (id) DO UPDATE SET
   head_hash = EXCLUDED.head_hash,
   chain_index = EXCLUDED.chain_index,
   valid = EXCLUDED.valid,
+  anchor_hmac = EXCLUDED.anchor_hmac,
   updated_at = EXCLUDED.updated_at`,
-		s.auditChainHead, len(s.audits), s.auditChainValid); err != nil {
+		s.auditChainHead, len(s.audits), s.auditChainValid, s.auditChainAnchor); err != nil {
 		return err
 	}
 	return nil
@@ -396,8 +405,8 @@ func (s *Store) postgresAddAuditLocked(event domain.AuditEvent) (domain.AuditEve
 	defer tx.ExecContext(context.Background(), `SELECT pg_advisory_unlock(72743001)`)
 
 	if _, err := tx.ExecContext(ctx, `
-INSERT INTO oatd_audit_chain_state (id, head_hash, chain_index, valid, updated_at)
-VALUES (1, '', 0, TRUE, now())
+INSERT INTO oatd_audit_chain_state (id, head_hash, chain_index, valid, anchor_hmac, updated_at)
+VALUES (1, '', 0, TRUE, '', now())
 ON CONFLICT (id) DO NOTHING`); err != nil {
 		_ = tx.Rollback()
 		return domain.AuditEvent{}, err
@@ -435,8 +444,8 @@ ON CONFLICT (id) DO UPDATE SET
 	}
 	if _, err := tx.ExecContext(ctx, `
 UPDATE oatd_audit_chain_state
-SET head_hash = $1, chain_index = $2, valid = TRUE, updated_at = now()
-WHERE id = 1`, event.Hash, event.ChainIndex); err != nil {
+SET head_hash = $1, chain_index = $2, valid = TRUE, anchor_hmac = $3, updated_at = now()
+WHERE id = 1`, event.Hash, event.ChainIndex, auditChainAnchorValue(event.Hash, event.ChainIndex, true)); err != nil {
 		_ = tx.Rollback()
 		return domain.AuditEvent{}, err
 	}
@@ -445,6 +454,7 @@ WHERE id = 1`, event.Hash, event.ChainIndex); err != nil {
 	}
 	s.auditChainHead = event.Hash
 	s.auditChainValid = true
+	s.auditChainAnchor = auditChainAnchorValue(event.Hash, event.ChainIndex, true)
 	return event, nil
 }
 
@@ -463,7 +473,8 @@ func (s *Store) postgresAuditChainSnapshot() AuditChainSnapshot {
 	var headHash sql.NullString
 	var chainIndex sql.NullInt64
 	var valid sql.NullBool
-	if err := db.QueryRowContext(ctx, `SELECT head_hash, chain_index, valid FROM oatd_audit_chain_state WHERE id = 1`).Scan(&headHash, &chainIndex, &valid); err != nil {
+	var anchor sql.NullString
+	if err := db.QueryRowContext(ctx, `SELECT head_hash, chain_index, valid, anchor_hmac FROM oatd_audit_chain_state WHERE id = 1`).Scan(&headHash, &chainIndex, &valid, &anchor); err != nil {
 		s.mu.RLock()
 		defer s.mu.RUnlock()
 		return s.auditChainSnapshotLocked()
@@ -477,6 +488,10 @@ func (s *Store) postgresAuditChainSnapshot() AuditChainSnapshot {
 	if valid.Valid {
 		snap.Valid = valid.Bool
 	}
+	if anchor.Valid {
+		snap.Anchor = anchor.String
+		snap.Anchored = strings.TrimSpace(anchor.String) != ""
+	}
 	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM oatd_audit_events`).Scan(&snap.Total); err != nil {
 		s.mu.RLock()
 		defer s.mu.RUnlock()
@@ -484,7 +499,16 @@ func (s *Store) postgresAuditChainSnapshot() AuditChainSnapshot {
 	}
 	if snap.Head == "" {
 		snap.Valid = snap.Total == 0
+		snap.Anchored = false
 		return snap
+	}
+	expectedAnchor := auditChainAnchorValue(snap.Head, snap.Linked, snap.Valid)
+	if expectedAnchor != "" {
+		snap.Anchored = true
+		if snap.Anchor != "" && snap.Anchor != expectedAnchor {
+			snap.Valid = false
+		}
+		snap.Anchor = expectedAnchor
 	}
 	var (
 		id   string
