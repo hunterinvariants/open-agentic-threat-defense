@@ -144,6 +144,75 @@ func TestRBACBlocksAuditForViewer(t *testing.T) {
 	}
 }
 
+func TestGatewayDecisionEndpoint(t *testing.T) {
+	app, err := NewWithOptions(Options{})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/decide", strings.NewReader(`{
+		"id":"gw-1",
+		"asset_id":"agent-1",
+		"hostname":"agent-1",
+		"actor":"local-agent",
+		"tool_name":"asset_inventory",
+		"command":"inventory scan",
+		"arguments":"token=abc123"
+	}`))
+	rec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var decision struct {
+		Verdict            string `json:"verdict"`
+		Reason             string `json:"reason"`
+		ToolName           string `json:"tool_name"`
+		RecommendedActions []struct {
+			Type string `json:"type"`
+		} `json:"recommended_actions"`
+		Alerts []struct {
+			RuleID string `json:"rule_id"`
+		} `json:"alerts"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &decision); err != nil {
+		t.Fatalf("decode gateway decision: %v", err)
+	}
+	if decision.Verdict != "require_approval" {
+		t.Fatalf("expected approval verdict, got %#v", decision)
+	}
+	if decision.ToolName != "asset_inventory" {
+		t.Fatalf("unexpected tool name: %#v", decision)
+	}
+	if len(decision.Alerts) == 0 {
+		t.Fatalf("expected alerts in gateway decision: %#v", decision)
+	}
+	if len(decision.RecommendedActions) == 0 {
+		t.Fatalf("expected recommended actions in gateway decision: %#v", decision)
+	}
+	audits := app.store.ListAudits()
+	if len(audits) == 0 || audits[0].Action != "gateway.decide" || audits[0].Outcome != "require_approval" {
+		t.Fatalf("unexpected audit log: %#v", audits)
+	}
+	if len(app.store.ListAlerts()) == 0 {
+		t.Fatal("expected gateway alerts to be stored")
+	}
+}
+
+func TestGatewayDecisionRequiresTokenWhenConfigured(t *testing.T) {
+	app, err := NewWithOptions(Options{APIToken: "secret"})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/decide", strings.NewReader(`{"tool_name":"asset_inventory"}`))
+	rec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+}
+
 func TestSessionLoginAndLogout(t *testing.T) {
 	app, err := NewWithOptions(Options{
 		Users: []auth.UserConfig{{Name: "alice", TokenHash: auth.HashToken("secret"), Roles: []string{auth.RoleOperator}}},

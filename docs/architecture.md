@@ -6,6 +6,7 @@ Open Agentic Threat Defense detects agentic threat behavior by correlating
 signals that are often handled separately:
 
 - AI-agent and MCP-style tool calls;
+- inline tool-call gate decisions before tool execution;
 - host process activity;
 - outbound network flows;
 - deception and canary hits;
@@ -66,6 +67,21 @@ portable Postgres backups.
 
 Approved agent tools and egress hosts are configurable through `--policy`.
 If no policy file is supplied, the built-in defaults are used.
+
+### Inline Gateway
+
+The Wedge is an inline tool-call gateway that sits in front of agent
+execution. `POST /api/gateway/decide` evaluates a proposed tool call and
+returns one of three verdicts before the tool can run:
+
+- `allow`
+- `deny`
+- `require_approval`
+
+The gateway reuses the same policy engine, alert store, audit log, and response
+planner as the rest of the service. It adds evidence at the decision point
+instead of only after telemetry arrives. That gives the product a control-point
+shape that is distinct from a pure SOC/XDR telemetry platform.
 
 ### Correlator
 

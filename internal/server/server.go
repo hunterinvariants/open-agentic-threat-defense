@@ -140,6 +140,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("/readyz", a.handleReady)
 	mux.HandleFunc("/api/status", a.handleStatus)
 	mux.HandleFunc("/api/session", a.handleSession)
+	mux.HandleFunc("/api/gateway/decide", a.handleGatewayDecision)
 	mux.HandleFunc("/api/events", a.handleEvents)
 	mux.HandleFunc("/api/alerts", a.handleAlerts)
 	mux.HandleFunc("/api/assets", a.handleAssets)
@@ -351,6 +352,43 @@ func (a *App) handleEvents(w http.ResponseWriter, r *http.Request) {
 	default:
 		methodNotAllowed(w)
 	}
+}
+
+func (a *App) handleGatewayDecision(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w)
+		return
+	}
+	var req domain.ToolCallRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	a.prepareToolCallRequest(&req)
+
+	decision := a.policy.GateToolCall(req)
+	a.prepareAlerts(decision.Alerts)
+	added, err := a.store.AddAlerts(decision.Alerts)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if len(added) > 0 {
+		a.exportAlerts(added)
+	}
+	decision.Alerts = added
+	decision.RecommendedActions = a.recommendedActionsForAlerts(added)
+	principal := principalFromRequest(r)
+	a.recordAudit(r, principal, "gateway.decide", "tool_call", decision.RequestID, string(decision.Verdict), map[string]string{
+		"tool":        decision.ToolName,
+		"asset_id":    req.AssetID,
+		"hostname":    req.Hostname,
+		"risk":        string(decision.Risk),
+		"alerts":      fmt.Sprintf("%d", len(added)),
+		"reason":      decision.Reason,
+		"destination": req.Destination,
+	})
+	writeJSON(w, http.StatusAccepted, decision)
 }
 
 func (a *App) handleAlerts(w http.ResponseWriter, r *http.Request) {
@@ -659,6 +697,34 @@ func (a *App) prepareAction(action *domain.ResponseAction) {
 	if action.Metadata == nil {
 		action.Metadata = make(map[string]string)
 	}
+}
+
+func (a *App) prepareToolCallRequest(request *domain.ToolCallRequest) {
+	if request.ID == "" {
+		request.ID = a.nextID("gw")
+	}
+	if request.Timestamp.IsZero() {
+		request.Timestamp = time.Now().UTC()
+	}
+	if request.Metadata == nil {
+		request.Metadata = make(map[string]string)
+	}
+}
+
+func (a *App) recommendedActionsForAlerts(alerts []domain.Alert) []domain.ResponseAction {
+	seen := make(map[string]struct{})
+	actions := make([]domain.ResponseAction, 0)
+	for _, alert := range alerts {
+		for _, action := range alert.RecommendedActions {
+			key := strings.Join([]string{action.Type, action.AssetID, action.Target, action.Reason}, "|")
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			actions = append(actions, action)
+		}
+	}
+	return actions
 }
 
 func (a *App) nextID(prefix string) string {

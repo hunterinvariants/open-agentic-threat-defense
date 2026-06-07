@@ -81,3 +81,61 @@ func TestEvaluateAllowsConfiguredEgressHost(t *testing.T) {
 		}
 	}
 }
+
+func TestGateToolCallAllowsApprovedTool(t *testing.T) {
+	engine := NewDefault()
+
+	decision := engine.GateToolCall(domain.ToolCallRequest{
+		ID:       "gw-1",
+		AssetID:  "host-1",
+		Actor:    "agent-1",
+		ToolName: "asset_inventory",
+		Command:  "list hosts",
+	})
+
+	if decision.Verdict != domain.GatewayAllow {
+		t.Fatalf("expected allow, got %s", decision.Verdict)
+	}
+	if len(decision.Alerts) != 0 {
+		t.Fatalf("expected no alerts, got %#v", decision.Alerts)
+	}
+}
+
+func TestGateToolCallRequiresApprovalForSecrets(t *testing.T) {
+	engine := NewDefault()
+
+	decision := engine.GateToolCall(domain.ToolCallRequest{
+		ID:        "gw-1",
+		AssetID:   "host-1",
+		Actor:     "agent-1",
+		ToolName:  "asset_inventory",
+		Command:   "inspect inventory",
+		Arguments: "token=abc123",
+	})
+
+	if decision.Verdict != domain.GatewayRequireApproval {
+		t.Fatalf("expected approval, got %s", decision.Verdict)
+	}
+	if !hasAlertRule(decision.Alerts, "agent.secret.exposure") {
+		t.Fatalf("expected secret exposure alert, got %#v", decision.Alerts)
+	}
+}
+
+func TestGateToolCallDeniesUnapprovedTool(t *testing.T) {
+	engine := NewDefault()
+
+	decision := engine.GateToolCall(domain.ToolCallRequest{
+		ID:       "gw-1",
+		AssetID:  "host-1",
+		Actor:    "agent-1",
+		ToolName: "shell_exec",
+		Command:  "read env token",
+	})
+
+	if decision.Verdict != domain.GatewayDeny {
+		t.Fatalf("expected deny, got %s", decision.Verdict)
+	}
+	if !hasAlertRule(decision.Alerts, "agent.tool.unapproved") {
+		t.Fatalf("expected unapproved tool alert, got %#v", decision.Alerts)
+	}
+}

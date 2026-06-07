@@ -56,6 +56,42 @@ type Event struct {
 	Metadata    map[string]string `json:"metadata"`
 }
 
+type ToolCallRequest struct {
+	ID          string            `json:"id"`
+	Timestamp   time.Time         `json:"timestamp"`
+	AssetID     string            `json:"asset_id"`
+	Hostname    string            `json:"hostname"`
+	Actor       string            `json:"actor"`
+	ToolName    string            `json:"tool_name"`
+	Command     string            `json:"command,omitempty"`
+	Arguments   string            `json:"arguments,omitempty"`
+	Signal      string            `json:"signal,omitempty"`
+	Destination string            `json:"destination,omitempty"`
+	Labels      []string          `json:"labels,omitempty"`
+	Metadata    map[string]string `json:"metadata,omitempty"`
+}
+
+type GatewayVerdict string
+
+const (
+	GatewayAllow           GatewayVerdict = "allow"
+	GatewayDeny            GatewayVerdict = "deny"
+	GatewayRequireApproval GatewayVerdict = "require_approval"
+)
+
+type ToolCallDecision struct {
+	ID                 string            `json:"id"`
+	RequestID          string            `json:"request_id"`
+	ToolName           string            `json:"tool_name"`
+	Verdict            GatewayVerdict    `json:"verdict"`
+	Reason             string            `json:"reason"`
+	Risk               Severity          `json:"risk"`
+	CreatedAt          time.Time         `json:"created_at"`
+	Alerts             []Alert           `json:"alerts,omitempty"`
+	RecommendedActions []ResponseAction  `json:"recommended_actions,omitempty"`
+	Metadata           map[string]string `json:"metadata,omitempty"`
+}
+
 type AlertStatus string
 
 const (

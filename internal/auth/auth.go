@@ -18,7 +18,7 @@ const (
 	RoleOperator    = "operator"
 	RoleAdmin       = "admin"
 	loginBackoffCap = 1 * time.Minute
-	loginAttemptTTL  = 24 * time.Hour
+	loginAttemptTTL = 24 * time.Hour
 )
 
 type UserConfig struct {
@@ -238,6 +238,9 @@ func (a *Authenticator) ClearSessionCookie(w http.ResponseWriter) {
 func RequiredRoles(method string, path string) []string {
 	if path == "/api/audit" {
 		return []string{RoleAnalyst, RoleOperator}
+	}
+	if path == "/api/gateway/decide" {
+		return []string{RoleIngestor, RoleAnalyst, RoleOperator}
 	}
 	if method == http.MethodGet || method == http.MethodHead || method == http.MethodOptions {
 		return []string{RoleViewer, RoleAnalyst, RoleOperator, RoleIngestor}
