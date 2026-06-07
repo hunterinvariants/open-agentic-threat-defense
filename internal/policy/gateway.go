@@ -23,6 +23,7 @@ func (e *Engine) GateToolCall(request domain.ToolCallRequest) domain.ToolCallDec
 	event := domain.Event{
 		ID:          request.ID,
 		Timestamp:   request.Timestamp,
+		Tenant:      strings.TrimSpace(request.Tenant),
 		Kind:        domain.EventAgentToolCall,
 		AssetID:     request.AssetID,
 		Hostname:    request.Hostname,
@@ -36,7 +37,7 @@ func (e *Engine) GateToolCall(request domain.ToolCallRequest) domain.ToolCallDec
 	}
 
 	alerts := e.Evaluate(event)
-	if request.Destination != "" && isExternalDestination(request.Destination) && !e.isApprovedEgress(request.Destination) {
+	if request.Destination != "" && isExternalDestination(request.Destination) && !e.egressApprovedForTenant(request.Tenant, request.Destination) {
 		alerts = append(alerts, newAlert(
 			"network.egress.unknown",
 			"Unknown outbound destination",

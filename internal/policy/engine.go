@@ -21,6 +21,8 @@ type Engine struct {
 	deceptionMu         sync.RWMutex
 	deception           map[string]domain.DeceptionToken
 	deceptionSeq        int
+	tenantMu            sync.RWMutex
+	tenantPolicies      map[string]compiledTenantPolicy
 	historyMu           sync.Mutex
 	history             map[string]*gatewayHistoryState
 }
@@ -88,6 +90,7 @@ func New(config Config) *Engine {
 		approvedEgressHosts: approvedEgressHosts,
 		pack:                pack,
 		deception:           make(map[string]domain.DeceptionToken),
+		tenantPolicies:      make(map[string]compiledTenantPolicy),
 		history:             make(map[string]*gatewayHistoryState),
 	}
 	engine.SetDeceptionTokens(config.DeceptionTokens)
@@ -250,7 +253,7 @@ func (e *Engine) Evaluate(event domain.Event) []domain.Alert {
 		if tool == "" {
 			tool = "unknown"
 		}
-		if !e.isToolApproved(tool) {
+		if !e.toolApprovedForTenant(event.Tenant, tool) {
 			alerts = append(alerts, newAlert(
 				"agent.tool.unapproved",
 				"Unapproved agent tool call",
@@ -273,7 +276,7 @@ func (e *Engine) Evaluate(event domain.Event) []domain.Alert {
 		}
 	}
 
-	if event.Kind == domain.EventNetworkFlow && isExternalDestination(event.Destination) && !e.isApprovedEgress(event.Destination) {
+	if event.Kind == domain.EventNetworkFlow && isExternalDestination(event.Destination) && !e.egressApprovedForTenant(event.Tenant, event.Destination) {
 		alerts = append(alerts, newAlert(
 			"network.egress.unknown",
 			"Unknown outbound destination",

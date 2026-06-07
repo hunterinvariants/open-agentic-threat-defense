@@ -70,6 +70,7 @@ type DeceptionToken struct {
 type ToolCallRequest struct {
 	ID          string            `json:"id"`
 	Timestamp   time.Time         `json:"timestamp"`
+	Tenant      string            `json:"tenant,omitempty"`
 	AssetID     string            `json:"asset_id"`
 	Hostname    string            `json:"hostname"`
 	Actor       string            `json:"actor"`

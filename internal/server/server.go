@@ -79,6 +79,7 @@ type Options struct {
 	ThreatPackPath            string
 	PolicyPath                string
 	DeceptionTokens           []domain.DeceptionToken
+	TenantPolicies            []policy.TenantPolicy
 	LicenseToken              string
 	LicensePublicKey          string
 	AlertWebhookURL           string
@@ -209,9 +210,13 @@ func NewWithOptions(options Options) (*App, error) {
 	if token := strings.TrimSpace(options.LicenseToken); token != "" && strings.TrimSpace(options.LicensePublicKey) != "" {
 		licenseStatus = license.Evaluate(token, options.LicensePublicKey, time.Now().UTC())
 	}
+	policyEngine := policy.New(options.Policy)
+	for _, tenantPolicy := range options.TenantPolicies {
+		policyEngine.SetTenantPolicy(tenantPolicy)
+	}
 	return &App{
 		store:          st,
-		policy:         policy.New(options.Policy),
+		policy:         policyEngine,
 		correlator:     correlator.New(options.CorrelationWindow),
 		responder:      response.NewDryRun(),
 		webDir:         options.WebDir,
@@ -277,6 +282,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("/api/gateway/decide", a.handleGatewayDecision)
 	mux.HandleFunc("/api/gateway/execute", a.handleGatewayExecute)
 	mux.HandleFunc("/api/policy/reload", a.handlePolicyReload)
+	mux.HandleFunc("/api/policy/tenants", a.handleTenantPolicies)
 	mux.HandleFunc("/api/deception/tokens", a.handleDeceptionTokens)
 	mux.HandleFunc("/api/timeline", a.handleTimeline)
 	mux.HandleFunc("/api/license", a.handleLicense)
@@ -713,10 +719,11 @@ func (a *App) handleGatewayDecision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.prepareToolCallRequest(&req)
-
-	decision := a.policy.GateToolCall(req)
 	principal := principalFromRequest(r)
 	tenant := tenantForPrincipal(principal)
+	req.Tenant = tenant
+
+	decision := a.policy.GateToolCall(req)
 	a.prepareAlerts(decision.Alerts, tenant)
 	added, err := a.addAlertsForTenant(decision.Alerts, tenant)
 	if err != nil {
@@ -777,10 +784,11 @@ func (a *App) handleGatewayExecute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.prepareToolCallRequest(&req)
-
-	decision := a.policy.GateToolCall(req)
 	principal := principalFromRequest(r)
 	tenant := tenantForPrincipal(principal)
+	req.Tenant = tenant
+
+	decision := a.policy.GateToolCall(req)
 	a.prepareAlerts(decision.Alerts, tenant)
 	added, err := a.addAlertsForTenant(decision.Alerts, tenant)
 	if err != nil {
@@ -902,10 +910,11 @@ func (a *App) handleGatewayProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	req.ToolCall.Destination = req.UpstreamURL
 	a.prepareToolCallRequest(&req.ToolCall)
-
-	decision := a.policy.GateToolCall(req.ToolCall)
 	principal := principalFromRequest(r)
 	tenant := tenantForPrincipal(principal)
+	req.ToolCall.Tenant = tenant
+
+	decision := a.policy.GateToolCall(req.ToolCall)
 	a.prepareAlerts(decision.Alerts, tenant)
 	added, err := a.addAlertsForTenant(decision.Alerts, tenant)
 	if err != nil {
@@ -1360,6 +1369,56 @@ func (a *App) handleLicense(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, a.licenseStatus)
+}
+
+// handleTenantPolicies manages org-scoped policy overlays (approved tools and
+// egress per tenant). Admin role required for all methods.
+func (a *App) handleTenantPolicies(w http.ResponseWriter, r *http.Request) {
+	principal := principalFromRequest(r)
+	if !principal.HasAny(auth.RoleAdmin) {
+		writeError(w, http.StatusForbidden, errors.New("admin role required"))
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, map[string]any{"tenant_policies": a.policy.ListTenantPolicies()})
+	case http.MethodPost, http.MethodPut:
+		var req policy.TenantPolicy
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		stored, ok := a.policy.SetTenantPolicy(req)
+		if !ok {
+			writeError(w, http.StatusBadRequest, errors.New("tenant_id is required"))
+			return
+		}
+		a.recordAudit(r, principal, "policy.tenant.set", "policy", stored.TenantID, "accepted", map[string]string{
+			"tenant":          stored.TenantID,
+			"approved_tools":  fmt.Sprintf("%d", len(stored.ApprovedTools)),
+			"approved_egress": fmt.Sprintf("%d", len(stored.ApprovedEgress)),
+		})
+		writeJSON(w, http.StatusOK, stored)
+	case http.MethodDelete:
+		tenant := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
+		if tenant == "" {
+			writeError(w, http.StatusBadRequest, errors.New("tenant_id query parameter is required"))
+			return
+		}
+		removed := a.policy.RemoveTenantPolicy(tenant)
+		outcome := "accepted"
+		if !removed {
+			outcome = "not_found"
+		}
+		a.recordAudit(r, principal, "policy.tenant.remove", "policy", tenant, outcome, map[string]string{"tenant": tenant})
+		if !removed {
+			writeError(w, http.StatusNotFound, errors.New("tenant policy not found"))
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"removed": true, "tenant_id": tenant})
+	default:
+		methodNotAllowed(w)
+	}
 }
 
 func (a *App) handleResponseApproval(w http.ResponseWriter, r *http.Request) {
