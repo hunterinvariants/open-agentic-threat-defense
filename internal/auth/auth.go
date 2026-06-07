@@ -272,6 +272,9 @@ func RequiredRoles(method string, path string) []string {
 	if path == "/api/gateway/queue" || strings.HasPrefix(path, "/api/gateway/actions/") {
 		return []string{RoleAnalyst, RoleOperator}
 	}
+	if strings.HasPrefix(path, "/api/deception") {
+		return []string{RoleOperator}
+	}
 	if method == http.MethodGet || method == http.MethodHead || method == http.MethodOptions {
 		return []string{RoleViewer, RoleAnalyst, RoleOperator, RoleIngestor}
 	}

@@ -57,6 +57,16 @@ type Event struct {
 	Metadata    map[string]string `json:"metadata"`
 }
 
+type DeceptionToken struct {
+	ID        string            `json:"id"`
+	Name      string            `json:"name"`
+	Kind      string            `json:"kind"`
+	Value     string            `json:"value"`
+	CreatedAt time.Time         `json:"created_at"`
+	Labels    []string          `json:"labels,omitempty"`
+	Metadata  map[string]string `json:"metadata,omitempty"`
+}
+
 type ToolCallRequest struct {
 	ID          string            `json:"id"`
 	Timestamp   time.Time         `json:"timestamp"`

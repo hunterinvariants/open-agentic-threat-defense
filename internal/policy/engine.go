@@ -1,11 +1,14 @@
 package policy
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/open-agentic-threat-defense/oadtd/internal/domain"
 )
@@ -15,6 +18,9 @@ type Engine struct {
 	approvedTools       map[string]struct{}
 	approvedEgressHosts map[string]struct{}
 	pack                ThreatPack
+	deceptionMu         sync.RWMutex
+	deception           map[string]domain.DeceptionToken
+	deceptionSeq        int
 	historyMu           sync.Mutex
 	history             map[string]*gatewayHistoryState
 }
@@ -23,6 +29,7 @@ type Config struct {
 	ApprovedTools       []string
 	ApprovedEgressHosts []string
 	ThreatPack          ThreatPack
+	DeceptionTokens     []domain.DeceptionToken
 }
 
 func DefaultConfig() Config {
@@ -76,12 +83,15 @@ func New(config Config) *Engine {
 		}
 	}
 
-	return &Engine{
+	engine := &Engine{
 		approvedTools:       approvedTools,
 		approvedEgressHosts: approvedEgressHosts,
 		pack:                pack,
+		deception:           make(map[string]domain.DeceptionToken),
 		history:             make(map[string]*gatewayHistoryState),
 	}
+	engine.SetDeceptionTokens(config.DeceptionTokens)
+	return engine
 }
 
 func withDefaults(config Config) Config {
@@ -120,6 +130,116 @@ func (e *Engine) Reload(config Config) {
 	e.approvedEgressHosts = rebuilt.approvedEgressHosts
 	e.pack = rebuilt.pack
 	e.cfgMu.Unlock()
+}
+
+// SetDeceptionTokens replaces the deception/canary registry (startup seed).
+func (e *Engine) SetDeceptionTokens(tokens []domain.DeceptionToken) {
+	e.deceptionMu.Lock()
+	defer e.deceptionMu.Unlock()
+	e.deception = make(map[string]domain.DeceptionToken, len(tokens))
+	e.deceptionSeq = 0
+	for _, token := range tokens {
+		token = normalizeDeceptionToken(token)
+		if token.Value == "" {
+			continue
+		}
+		if token.ID == "" {
+			token.ID = e.nextDeceptionIDLocked()
+		}
+		e.deception[token.ID] = token
+	}
+}
+
+// AddDeceptionToken registers a canary/decoy token at runtime.
+func (e *Engine) AddDeceptionToken(token domain.DeceptionToken) (domain.DeceptionToken, error) {
+	if strings.TrimSpace(token.Value) == "" {
+		return domain.DeceptionToken{}, errors.New("deception token value is required")
+	}
+	e.deceptionMu.Lock()
+	defer e.deceptionMu.Unlock()
+	token = normalizeDeceptionToken(token)
+	if token.ID == "" {
+		token.ID = e.nextDeceptionIDLocked()
+	}
+	e.deception[token.ID] = token
+	return token, nil
+}
+
+func (e *Engine) ListDeceptionTokens() []domain.DeceptionToken {
+	e.deceptionMu.RLock()
+	defer e.deceptionMu.RUnlock()
+	tokens := make([]domain.DeceptionToken, 0, len(e.deception))
+	for _, token := range e.deception {
+		tokens = append(tokens, token)
+	}
+	sort.Slice(tokens, func(i, j int) bool { return tokens[i].ID < tokens[j].ID })
+	return tokens
+}
+
+func (e *Engine) RemoveDeceptionToken(id string) bool {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return false
+	}
+	e.deceptionMu.Lock()
+	defer e.deceptionMu.Unlock()
+	if _, ok := e.deception[id]; !ok {
+		return false
+	}
+	delete(e.deception, id)
+	return true
+}
+
+// MatchDeception reports whether any of the given text fields contain a
+// registered canary value, using the same obfuscation-resistant matching as
+// the gateway (compaction + base64 decode).
+func (e *Engine) MatchDeception(values ...string) (domain.DeceptionToken, bool) {
+	e.deceptionMu.RLock()
+	defer e.deceptionMu.RUnlock()
+	if len(e.deception) == 0 {
+		return domain.DeceptionToken{}, false
+	}
+	variants := gatewayTextVariants(values...)
+	for _, token := range e.deception {
+		needle := normalizeGatewayText(token.Value)
+		if needle == "" {
+			continue
+		}
+		for _, variant := range variants {
+			if strings.Contains(variant, needle) {
+				return token, true
+			}
+		}
+	}
+	return domain.DeceptionToken{}, false
+}
+
+func normalizeDeceptionToken(token domain.DeceptionToken) domain.DeceptionToken {
+	token.ID = strings.TrimSpace(token.ID)
+	token.Value = strings.TrimSpace(token.Value)
+	token.Kind = strings.ToLower(strings.TrimSpace(token.Kind))
+	if token.Kind == "" {
+		token.Kind = "secret"
+	}
+	token.Name = strings.TrimSpace(token.Name)
+	if token.Name == "" {
+		token.Name = token.Kind + "-canary"
+	}
+	if token.CreatedAt.IsZero() {
+		token.CreatedAt = time.Now().UTC()
+	}
+	return token
+}
+
+// nextDeceptionIDLocked returns a unique dt-N id. Caller must hold deceptionMu.
+func (e *Engine) nextDeceptionIDLocked() string {
+	for {
+		e.deceptionSeq++
+		id := fmt.Sprintf("dt-%d", e.deceptionSeq)
+		if _, exists := e.deception[id]; !exists {
+			return id
+		}
+	}
 }
 
 func (e *Engine) Evaluate(event domain.Event) []domain.Alert {
@@ -186,6 +306,17 @@ func (e *Engine) Evaluate(event domain.Event) []domain.Alert {
 			domain.SeverityCritical,
 			event,
 			map[string]string{"signal": event.Signal, "destination": event.Destination},
+		))
+	}
+
+	if token, ok := e.MatchDeception(event.Command, event.Signal, event.ToolName, event.Destination, strings.Join(event.Labels, " "), metadataText(event.Metadata)); ok {
+		alerts = append(alerts, newAlert(
+			"deception.canary.hit",
+			"Canary or deception asset touched",
+			"Activity referenced a registered deception/canary token from the registry.",
+			domain.SeverityCritical,
+			event,
+			map[string]string{"deception_token": token.Name, "deception_kind": token.Kind, "deception_id": token.ID},
 		))
 	}
 

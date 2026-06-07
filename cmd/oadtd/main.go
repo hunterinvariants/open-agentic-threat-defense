@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"log"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/open-agentic-threat-defense/oadtd/internal/config"
+	"github.com/open-agentic-threat-defense/oadtd/internal/domain"
 	"github.com/open-agentic-threat-defense/oadtd/internal/server"
 )
 
@@ -26,6 +28,7 @@ func main() {
 	policyPath := flag.String("policy", "", "optional JSON policy configuration path")
 	apiToken := flag.String("api-token", os.Getenv("OATD_API_TOKEN"), "optional API token for write endpoints")
 	threatPackPath := flag.String("threat-pack", os.Getenv("OATD_THREAT_PACK"), "optional threat pack JSON file")
+	deceptionTokensPath := flag.String("deception-tokens", os.Getenv("OATD_DECEPTION_TOKENS"), "optional JSON file of deception/canary tokens")
 	alertWebhookURL := flag.String("alert-webhook-url", os.Getenv("OATD_ALERT_WEBHOOK_URL"), "optional SIEM/webhook URL for new alerts")
 	alertWebhookToken := flag.String("alert-webhook-token", os.Getenv("OATD_ALERT_WEBHOOK_TOKEN"), "optional bearer token for alert webhook")
 	ticketWebhookURL := flag.String("ticket-webhook-url", os.Getenv("OATD_TICKET_WEBHOOK_URL"), "optional webhook URL for incident ticket creation")
@@ -99,6 +102,16 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	var deceptionTokens []domain.DeceptionToken
+	if value := strings.TrimSpace(*deceptionTokensPath); value != "" {
+		data, err := os.ReadFile(value)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if err := json.Unmarshal(data, &deceptionTokens); err != nil {
+			log.Fatal(err)
+		}
+	}
 	retention, err := parseFlexibleDuration(strings.TrimSpace(*retentionWindow))
 	if err != nil {
 		log.Fatal(err)
@@ -114,6 +127,7 @@ func main() {
 		PolicyPath:                strings.TrimSpace(*policyPath),
 		CorrelationWindow:         window,
 		ThreatPackPath:            strings.TrimSpace(*threatPackPath),
+		DeceptionTokens:           deceptionTokens,
 		AlertWebhookURL:           *alertWebhookURL,
 		AlertWebhookToken:         *alertWebhookToken,
 		TicketWebhookURL:          *ticketWebhookURL,

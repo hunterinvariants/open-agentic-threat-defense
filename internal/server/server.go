@@ -74,6 +74,7 @@ type Options struct {
 	CorrelationWindow         time.Duration
 	ThreatPackPath            string
 	PolicyPath                string
+	DeceptionTokens           []domain.DeceptionToken
 	AlertWebhookURL           string
 	AlertWebhookToken         string
 	TicketWebhookURL          string
@@ -189,6 +190,7 @@ func NewWithOptions(options Options) (*App, error) {
 			return nil, err
 		}
 	}
+	options.Policy.DeceptionTokens = options.DeceptionTokens
 	return &App{
 		store:          st,
 		policy:         policy.New(options.Policy),
@@ -244,6 +246,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("/api/gateway/decide", a.handleGatewayDecision)
 	mux.HandleFunc("/api/gateway/execute", a.handleGatewayExecute)
 	mux.HandleFunc("/api/policy/reload", a.handlePolicyReload)
+	mux.HandleFunc("/api/deception/tokens", a.handleDeceptionTokens)
 	mux.HandleFunc("/api/gateway/queue", a.handleGatewayQueue)
 	mux.HandleFunc("/api/gateway/actions/", a.handleGatewayAction)
 	mux.HandleFunc("/api/events", a.handleEvents)
@@ -1199,6 +1202,43 @@ func (a *App) ReloadPolicy() (int, error) {
 	}
 	a.policy.Reload(policyCfg)
 	return len(a.policy.Rules()), nil
+}
+
+func (a *App) handleDeceptionTokens(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, a.policy.ListDeceptionTokens())
+	case http.MethodPost:
+		var token domain.DeceptionToken
+		if err := json.NewDecoder(r.Body).Decode(&token); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		created, err := a.policy.AddDeceptionToken(token)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		a.recordAudit(r, principalFromRequest(r), "deception.register", "deception_token", created.ID, "accepted", map[string]string{
+			"name": created.Name,
+			"kind": created.Kind,
+		})
+		writeJSON(w, http.StatusCreated, created)
+	case http.MethodDelete:
+		id := strings.TrimSpace(r.URL.Query().Get("id"))
+		if id == "" {
+			writeError(w, http.StatusBadRequest, errors.New("id query parameter is required"))
+			return
+		}
+		if !a.policy.RemoveDeceptionToken(id) {
+			writeError(w, http.StatusNotFound, errors.New("deception token not found"))
+			return
+		}
+		a.recordAudit(r, principalFromRequest(r), "deception.remove", "deception_token", id, "accepted", nil)
+		writeJSON(w, http.StatusOK, map[string]any{"removed": true, "id": id})
+	default:
+		methodNotAllowed(w)
+	}
 }
 
 func (a *App) handleResponseApproval(w http.ResponseWriter, r *http.Request) {
