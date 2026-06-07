@@ -49,7 +49,12 @@ jobs:
           trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true' EXIT
           addr=""
           for _ in $(seq 1 60); do
-            addr="$(grep -Eo 'http://[^[:space:]]+' "$log" | tail -n 1)"
+            if ! kill -0 "$pid" 2>/dev/null; then
+              echo "server process exited before it became ready" >&2
+              cat "$log"
+              exit 1
+            fi
+            addr="$(grep -Eo 'http://[^[:space:]]+' "$log" | tail -n 1 || true)"
             if [ -n "$addr" ]; then
               break
             fi
@@ -59,7 +64,11 @@ jobs:
             cat "$log"
             exit 1
           fi
-          curl --fail --silent "$addr/healthz" >/dev/null
+          if ! curl --fail --silent "$addr/healthz" >/dev/null; then
+            echo "healthz check failed for $addr" >&2
+            cat "$log"
+            exit 1
+          fi
           kill "$pid"
           wait "$pid" || true
           trap - EXIT
