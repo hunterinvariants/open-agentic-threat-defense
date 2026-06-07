@@ -55,6 +55,7 @@ func main() {
 	servicenowPassword := flag.String("servicenow-password", os.Getenv("OATD_SERVICENOW_PASSWORD"), "ServiceNow password")
 	mcpUpstreamURL := flag.String("mcp-upstream-url", os.Getenv("OATD_MCP_UPSTREAM_URL"), "upstream MCP server URL for transparent interception")
 	mcpUpstreamToken := flag.String("mcp-upstream-token", os.Getenv("OATD_MCP_UPSTREAM_TOKEN"), "optional bearer token for MCP upstream")
+	proxyAllowLocalTargets := flag.Bool("proxy-allow-local-targets", parseBoolEnv(os.Getenv("OATD_PROXY_ALLOW_LOCAL_TARGETS")), "allow the gateway proxy to reach loopback/private/internal upstreams (DANGEROUS; off by default)")
 	oidcIssuerURL := flag.String("oidc-issuer-url", os.Getenv("OATD_OIDC_ISSUER_URL"), "OIDC issuer URL for SSO login")
 	oidcClientID := flag.String("oidc-client-id", os.Getenv("OATD_OIDC_CLIENT_ID"), "OIDC client ID")
 	oidcClientSecret := flag.String("oidc-client-secret", os.Getenv("OATD_OIDC_CLIENT_SECRET"), "OIDC client secret")
@@ -183,6 +184,7 @@ func main() {
 		ServiceNowPassword:        *servicenowPassword,
 		MCPUpstreamURL:            *mcpUpstreamURL,
 		MCPUpstreamToken:          *mcpUpstreamToken,
+		ProxyAllowLocalTargets:    *proxyAllowLocalTargets,
 		OIDCIssuerURL:             *oidcIssuerURL,
 		OIDCClientID:              *oidcClientID,
 		OIDCClientSecret:          *oidcClientSecret,

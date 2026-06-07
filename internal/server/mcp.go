@@ -286,11 +286,47 @@ func isBlockedProxyHost(host string) bool {
 	return false
 }
 
+var extraBlockedProxyCIDRs = parseProxyCIDRs(
+	"100.64.0.0/10", // RFC 6598 carrier-grade NAT / shared address space
+	"0.0.0.0/8",     // RFC 1122 "this network"
+	"192.0.0.0/24",  // RFC 6890 IETF protocol assignments
+	"198.18.0.0/15", // RFC 2544 benchmarking
+)
+
+func parseProxyCIDRs(cidrs ...string) []*net.IPNet {
+	nets := make([]*net.IPNet, 0, len(cidrs))
+	for _, c := range cidrs {
+		if _, n, err := net.ParseCIDR(c); err == nil {
+			nets = append(nets, n)
+		}
+	}
+	return nets
+}
+
 func isBlockedProxyIP(ip net.IP) bool {
 	if ip == nil {
 		return true
 	}
-	return ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsPrivate() || ip.IsMulticast() || ip.IsUnspecified()
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsPrivate() || ip.IsMulticast() || ip.IsUnspecified() {
+		return true
+	}
+	for _, blocked := range extraBlockedProxyCIDRs {
+		if blocked.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// redactURLCredentials removes any userinfo (user:password@) from a URL so it can
+// be safely stored in audit logs and action metadata (CWE-532).
+func redactURLCredentials(raw string) string {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.User == nil {
+		return raw
+	}
+	parsed.User = nil
+	return parsed.String()
 }
 
 func validatedHTTPClient(target *validatedUpstreamTarget) *http.Client {

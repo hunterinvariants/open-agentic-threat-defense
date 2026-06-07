@@ -54,8 +54,9 @@ type App struct {
 	github           exporter.GitHub
 	jira             exporter.Jira
 	servicenow       exporter.ServiceNow
-	mcpUpstreamURL   string
-	mcpUpstreamToken string
+	mcpUpstreamURL         string
+	mcpUpstreamToken       string
+	proxyAllowLocalTargets bool
 	oidc             *oidcProvider
 	saml             *samlProvider
 	instanceName     string
@@ -104,6 +105,7 @@ type Options struct {
 	ServiceNowPassword        string
 	MCPUpstreamURL            string
 	MCPUpstreamToken          string
+	ProxyAllowLocalTargets    bool
 	OIDCIssuerURL             string
 	OIDCClientID              string
 	OIDCClientSecret          string
@@ -261,8 +263,9 @@ func NewWithOptions(options Options) (*App, error) {
 			User:        options.ServiceNowUser,
 			Password:    options.ServiceNowPassword,
 		},
-		mcpUpstreamURL:   options.MCPUpstreamURL,
-		mcpUpstreamToken: options.MCPUpstreamToken,
+		mcpUpstreamURL:         options.MCPUpstreamURL,
+		mcpUpstreamToken:       options.MCPUpstreamToken,
+		proxyAllowLocalTargets: options.ProxyAllowLocalTargets,
 		oidc:             oidcProvider,
 		startedAt:        time.Now().UTC(),
 		licenseStatus:    licenseStatus,
@@ -900,11 +903,13 @@ func (a *App) handleGatewayProxy(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("upstream_url is required"))
 		return
 	}
-	parsedUpstream, err := validateProxyUpstreamURL(r.Context(), req.UpstreamURL, isLoopbackRemoteAddr(r.RemoteAddr))
+	parsedUpstream, err := validateProxyUpstreamURL(r.Context(), req.UpstreamURL, a.proxyAllowLocalTargets)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	// Never store userinfo credentials embedded in the URL in audit/action metadata.
+	req.UpstreamURL = redactURLCredentials(req.UpstreamURL)
 	if req.ToolCall.ToolName == "" {
 		req.ToolCall.ToolName = "proxy_forward"
 	}
@@ -2560,15 +2565,6 @@ func (a *App) requestIsSecure(r *http.Request) bool {
 	}
 	proto := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")))
 	return proto == "https" || proto == "wss"
-}
-
-func isLoopbackRemoteAddr(remoteAddr string) bool {
-	host, _, err := net.SplitHostPort(strings.TrimSpace(remoteAddr))
-	if err != nil {
-		host = strings.TrimSpace(remoteAddr)
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }
 
 func (a *App) isTrustedProxy(remoteAddr string) bool {

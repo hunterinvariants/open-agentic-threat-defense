@@ -172,6 +172,7 @@ func TestGatewayProxyForwardsAllowedToolCall(t *testing.T) {
 			TokenHash: auth.HashToken("secret"),
 			Roles:     []string{auth.RoleOperator},
 		}},
+		ProxyAllowLocalTargets: true,
 	})
 	if err != nil {
 		t.Fatalf("new app: %v", err)
