@@ -23,7 +23,7 @@ jobs:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.25.x"
+          go-version: "1.25.11"
       - run: go test ./...
       - name: Build
         shell: bash
