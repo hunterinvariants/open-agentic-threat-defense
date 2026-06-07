@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/open-agentic-threat-defense/oadtd/internal/domain"
@@ -111,6 +112,46 @@ func TestGateToolCallRequiresApprovalForSecrets(t *testing.T) {
 		ToolName:  "asset_inventory",
 		Command:   "inspect inventory",
 		Arguments: "token=abc123",
+	})
+
+	if decision.Verdict != domain.GatewayRequireApproval {
+		t.Fatalf("expected approval, got %s", decision.Verdict)
+	}
+	if !hasAlertRule(decision.Alerts, "agent.secret.exposure") {
+		t.Fatalf("expected secret exposure alert, got %#v", decision.Alerts)
+	}
+}
+
+func TestGateToolCallRequiresApprovalForObfuscatedSecrets(t *testing.T) {
+	engine := NewDefault()
+
+	decision := engine.GateToolCall(domain.ToolCallRequest{
+		ID:        "gw-1",
+		AssetID:   "host-1",
+		Actor:     "agent-1",
+		ToolName:  "asset_inventory",
+		Command:   "inspect inventory",
+		Arguments: `s\ecret=c2VjcmV0`,
+	})
+
+	if decision.Verdict != domain.GatewayRequireApproval {
+		t.Fatalf("expected approval, got %s", decision.Verdict)
+	}
+	if !strings.Contains(decision.Reason, "obfuscated") {
+		t.Fatalf("expected obfuscated reason, got %q", decision.Reason)
+	}
+}
+
+func TestGateToolCallRequiresApprovalForBase64Secrets(t *testing.T) {
+	engine := NewDefault()
+
+	decision := engine.GateToolCall(domain.ToolCallRequest{
+		ID:        "gw-1",
+		AssetID:   "host-1",
+		Actor:     "agent-1",
+		ToolName:  "asset_inventory",
+		Command:   "inspect inventory",
+		Arguments: "payload=c2VjcmV0",
 	})
 
 	if decision.Verdict != domain.GatewayRequireApproval {

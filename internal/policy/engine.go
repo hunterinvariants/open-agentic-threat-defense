@@ -139,14 +139,14 @@ func (e *Engine) Evaluate(event domain.Event) []domain.Alert {
 			))
 		}
 
-		if containsAny(event.Command+" "+event.Signal+" "+tool, []string{"secret", "token", "credential", "password", "env", "ssh_key", "api_key"}) {
+		if match, term, _ := gatewayContainsAny(gatewayTextVariants(event.Command, event.Signal, tool, metadataText(event.Metadata)), []string{"secret", "token", "credential", "password", "env", "ssh_key", "api_key"}); match {
 			alerts = append(alerts, newAlert(
 				"agent.secret.exposure",
 				"Potential secret exposure through agent context",
 				"Agent activity referenced secrets, credentials, tokens, or environment material.",
 				domain.SeverityCritical,
 				event,
-				map[string]string{"tool": tool, "command": event.Command},
+				map[string]string{"tool": tool, "command": event.Command, "match": term},
 			))
 		}
 	}
@@ -162,7 +162,10 @@ func (e *Engine) Evaluate(event domain.Event) []domain.Alert {
 		))
 	}
 
-	if event.Kind == domain.EventProcessStart && containsAny(event.Command+" "+event.Process+" "+event.Signal, discoveryTerms()) {
+	if event.Kind == domain.EventProcessStart && func() bool {
+		match, _, _ := gatewayContainsAny(gatewayTextVariants(event.Command, event.Process, event.Signal, metadataText(event.Metadata)), discoveryTerms())
+		return match
+	}() {
 		alerts = append(alerts, newAlert(
 			"process.discovery.chain",
 			"Suspicious discovery process",
@@ -184,7 +187,10 @@ func (e *Engine) Evaluate(event domain.Event) []domain.Alert {
 		))
 	}
 
-	if containsAny(event.Command+" "+event.Process+" "+event.Signal+" "+strings.Join(event.Labels, " "), []string{"llama", "ollama", "vllm", "gguf", "model-download", "cuda", "gpu", "tool_spawn"}) &&
+	if func() bool {
+		match, _, _ := gatewayContainsAny(gatewayTextVariants(event.Command, event.Process, event.Signal, strings.Join(event.Labels, " "), metadataText(event.Metadata)), []string{"llama", "ollama", "vllm", "gguf", "model-download", "cuda", "gpu", "tool_spawn"})
+		return match
+	}() &&
 		(event.Kind == domain.EventProcessStart || event.Kind == domain.EventNetworkFlow || event.Kind == domain.EventAgentToolCall) {
 		alerts = append(alerts, newAlert(
 			"model.runtime.suspicious",
