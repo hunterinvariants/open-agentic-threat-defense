@@ -906,6 +906,7 @@ func (a *App) gatewayActionFromDecision(request domain.ToolCallRequest, decision
 	if action.Metadata == nil {
 		action.Metadata = make(map[string]string)
 	}
+	mergeStringMaps(action.Metadata, decision.Metadata)
 	action.Metadata["request_id"] = request.ID
 	action.Metadata["tool"] = strings.TrimSpace(strings.ToLower(request.ToolName))
 	action.Metadata["actor"] = request.Actor
@@ -928,6 +929,15 @@ func (a *App) gatewayActionFromDecision(request domain.ToolCallRequest, decision
 		action.Metadata["labels"] = strings.Join(request.Labels, ",")
 	}
 	return action
+}
+
+func mergeStringMaps(dst map[string]string, src map[string]string) {
+	for key, value := range src {
+		if key == "" || value == "" {
+			continue
+		}
+		dst[key] = value
+	}
 }
 
 func cloneStringMap(values map[string]string) map[string]string {

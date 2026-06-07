@@ -84,6 +84,10 @@ planner as the rest of the service, but it now actually gates and executes the
 allowed stub tool. That gives the product a control-point shape that is
 distinct from a pure SOC/XDR telemetry platform.
 
+Decision intelligence is taint-aware: the gate carries source, sink, flow, and
+provenance metadata forward so tool calls can be explained as source-to-sink
+paths rather than only as keyword hits.
+
 Require-approval and deny outcomes create a persisted gateway action record so
 the decision path is visible in the same approval queue and audit trail as the
 rest of the response workflow. The `oadtdctl wedge-demo` command exercises the

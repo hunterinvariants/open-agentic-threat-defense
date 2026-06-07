@@ -13,8 +13,9 @@ malware behavior, or autonomous propagation. Demo data generates telemetry only.
 
 - Go HTTP service with Postgres persistence for production and JSON snapshot
   fallback for local development.
-- Policy engine for agent-tool abuse, secret exposure, unexpected egress,
-  discovery behavior, deception hits, and suspicious model runtime activity.
+- Policy engine for agent-tool abuse, taint-aware source-to-sink flow,
+  secret exposure, unexpected egress, discovery behavior, deception hits, and
+  suspicious model runtime activity.
 - Inline tool-call PEP for enforce-before-execute decisions at the tool
   boundary, backed by a separate PDP endpoint for diagnostics.
 - Correlator for multi-signal sequences such as discovery, credential touch,

@@ -162,6 +162,40 @@ func TestGateToolCallRequiresApprovalForBase64Secrets(t *testing.T) {
 	}
 }
 
+func TestGateToolCallRecordsTaintFlowMetadata(t *testing.T) {
+	engine := NewDefault()
+
+	decision := engine.GateToolCall(domain.ToolCallRequest{
+		ID:          "gw-1",
+		AssetID:     "host-1",
+		Actor:       "agent-1",
+		ToolName:    "asset_inventory",
+		Command:     "inspect inventory",
+		Arguments:   "token=abc123",
+		Destination: "https://example.com/webhook",
+		Metadata: map[string]string{
+			"session_id": "sess-123",
+			"trace_id":   "trace-456",
+		},
+	})
+
+	if decision.Verdict != domain.GatewayRequireApproval {
+		t.Fatalf("expected approval, got %s", decision.Verdict)
+	}
+	if got := decision.Metadata["taint_sources"]; got == "" || !strings.Contains(got, "secret:token") {
+		t.Fatalf("expected taint sources in metadata, got %#v", decision.Metadata)
+	}
+	if got := decision.Metadata["taint_sinks"]; got == "" || !strings.Contains(got, "external_destination:example.com") {
+		t.Fatalf("expected taint sinks in metadata, got %#v", decision.Metadata)
+	}
+	if got := decision.Metadata["taint_flows"]; got == "" || !strings.Contains(got, "secret:token->external_destination:example.com") {
+		t.Fatalf("expected taint flow in metadata, got %#v", decision.Metadata)
+	}
+	if got := decision.Metadata["taint_provenance"]; got == "" || !strings.Contains(got, "session_id:sess-123") || !strings.Contains(got, "trace_id:trace-456") {
+		t.Fatalf("expected taint provenance in metadata, got %#v", decision.Metadata)
+	}
+}
+
 func TestGateToolCallDeniesUnapprovedTool(t *testing.T) {
 	engine := NewDefault()
 

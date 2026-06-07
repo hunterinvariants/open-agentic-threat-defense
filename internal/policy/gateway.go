@@ -63,7 +63,8 @@ func (e *Engine) GateToolCall(request domain.ToolCallRequest) domain.ToolCallDec
 		))
 	}
 
-	verdict, reason, risk, findings := e.assessGatewayRequest(request, tool, command, signal, alerts)
+	taint := analyzeGatewayTaint(request, tool, command, signal)
+	verdict, reason, risk, findings := e.assessGatewayRequest(request, tool, command, signal, alerts, taint)
 
 	metadata := cloneStringMap(request.Metadata)
 	if metadata == nil {
@@ -84,6 +85,18 @@ func (e *Engine) GateToolCall(request domain.ToolCallRequest) domain.ToolCallDec
 	if request.ID != "" {
 		metadata["request_id"] = request.ID
 	}
+	if len(taint.Sources) > 0 {
+		metadata["taint_sources"] = strings.Join(taint.Sources, ";")
+	}
+	if len(taint.Sinks) > 0 {
+		metadata["taint_sinks"] = strings.Join(taint.Sinks, ";")
+	}
+	if len(taint.Flows) > 0 {
+		metadata["taint_flows"] = strings.Join(taint.Flows, ";")
+	}
+	if len(taint.Provenance) > 0 {
+		metadata["taint_provenance"] = strings.Join(taint.Provenance, ";")
+	}
 	if len(findings) > 0 {
 		metadata["signals"] = strings.Join(findings, ";")
 	}
@@ -101,7 +114,7 @@ func (e *Engine) GateToolCall(request domain.ToolCallRequest) domain.ToolCallDec
 	}
 }
 
-func (e *Engine) assessGatewayRequest(request domain.ToolCallRequest, tool string, command string, signal string, alerts []domain.Alert) (domain.GatewayVerdict, string, domain.Severity, []string) {
+func (e *Engine) assessGatewayRequest(request domain.ToolCallRequest, tool string, command string, signal string, alerts []domain.Alert, taint TaintAnalysis) (domain.GatewayVerdict, string, domain.Severity, []string) {
 	payloadVariants := gatewayTextVariants(
 		command,
 		request.Signal,
@@ -128,7 +141,42 @@ func (e *Engine) assessGatewayRequest(request domain.ToolCallRequest, tool strin
 		reason = fmt.Sprintf("tool %q is not on the approved manifest", tool)
 		risk = maxSeverity(risk, domain.SeverityHigh)
 	default:
-		if match, term, variant := gatewayContainsAny(payloadVariants, secretTerms()); match {
+		if len(taint.Flows) > 0 {
+			findings = append(findings, taint.Flows...)
+		}
+		if taint.HasSourcePrefix("canary:") && len(taint.Sinks) > 0 {
+			verdict = domain.GatewayDeny
+			reason = "canary source reached a sink and must be contained"
+			risk = maxSeverity(risk, domain.SeverityCritical)
+		} else if taint.HasSourcePrefix("secret:") && len(taint.Sinks) > 0 {
+			verdict = domain.GatewayRequireApproval
+			if taint.HasSignalPrefix("obfuscated_source:") || taint.HasSignalPrefix("obfuscated_sink:") {
+				reason = "obfuscated sensitive source may flow to a sink and requires approval"
+			} else {
+				reason = "sensitive source may flow to a sink and requires approval"
+			}
+			risk = maxSeverity(risk, domain.SeverityCritical)
+		} else if taint.HasSourcePrefix("secret:") {
+			verdict = domain.GatewayRequireApproval
+			if taint.HasSignalPrefix("obfuscated_source:") {
+				reason = "obfuscated sensitive material referenced by the tool call"
+			} else {
+				reason = "sensitive material referenced by the tool call"
+			}
+			risk = maxSeverity(risk, domain.SeverityCritical)
+		} else if taint.HasSourcePrefix("canary:") {
+			verdict = domain.GatewayDeny
+			reason = "canary source detected"
+			risk = maxSeverity(risk, domain.SeverityCritical)
+		} else if taint.HasSinkPrefix("external_destination:") {
+			verdict = domain.GatewayRequireApproval
+			reason = "tool call targets an external sink and requires operator approval"
+			risk = maxSeverity(risk, domain.SeverityHigh)
+		} else if len(taint.Sinks) > 0 && len(taint.Sources) > 0 {
+			verdict = domain.GatewayRequireApproval
+			reason = "source-to-sink flow requires operator approval"
+			risk = maxSeverity(risk, domain.SeverityHigh)
+		} else if match, term, variant := gatewayContainsAny(payloadVariants, secretTerms()); match {
 			verdict = domain.GatewayRequireApproval
 			if variant != term {
 				reason = "obfuscated sensitive material referenced by the tool call"
