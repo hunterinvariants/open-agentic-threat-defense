@@ -36,8 +36,7 @@ go test ./...
 Run the local dashboard:
 
 ```powershell
-go run ./cmd/oadtd --demo
+go run ./cmd/oadtd --demo --addr 127.0.0.1:8080
 ```
 
 Then open `http://localhost:8080`.
-

@@ -38,6 +38,30 @@ jobs:
       - run: go mod download
       - run: go vet ./...
       - run: go test ./...
+      - name: Smoke test local startup
+        shell: bash
+        run: |
+          set -euo pipefail
+          log="$(mktemp)"
+          go run ./cmd/oadtd --demo --addr 127.0.0.1:0 --insecure >"$log" 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true' EXIT
+          addr=""
+          for _ in $(seq 1 30); do
+            addr="$(sed -n 's/.*listening on http:\/\/\(127\.0\.0\.1:[0-9][0-9]*\).*/http:\/\/\1/p' "$log" | tail -n 1)"
+            if [ -n "$addr" ]; then
+              break
+            fi
+            sleep 1
+          done
+          if [ -z "$addr" ]; then
+            cat "$log"
+            exit 1
+          fi
+          curl --fail --silent "$addr/healthz" >/dev/null
+          kill "$pid"
+          wait "$pid" || true
+          trap - EXIT
 
   build:
     runs-on: ubuntu-latest

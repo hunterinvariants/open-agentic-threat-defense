@@ -5,9 +5,11 @@ import (
 	"errors"
 	"flag"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -52,7 +54,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	retention, err := time.ParseDuration(strings.TrimSpace(*retentionWindow))
+	retention, err := parseFlexibleDuration(strings.TrimSpace(*retentionWindow))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -91,9 +93,14 @@ func main() {
 		log.Printf("loaded demo telemetry with %d initial alerts", len(alerts))
 	}
 
-	log.Printf("Open Agentic Threat Defense %s listening on http://localhost%s", server.Version, *addr)
+	listener, err := net.Listen("tcp", *addr)
+	if err != nil {
+		log.Fatal(err)
+	}
+	actualAddr := listener.Addr().String()
+	log.Printf("Open Agentic Threat Defense %s listening on http://%s", server.Version, actualAddr)
 	srv := &http.Server{
-		Addr:              *addr,
+		Addr:              actualAddr,
 		Handler:           app.Routes(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
@@ -114,7 +121,7 @@ func main() {
 		}
 	}()
 
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err := srv.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
 }
@@ -146,4 +153,38 @@ func parseBoolEnv(value string) bool {
 	default:
 		return false
 	}
+}
+
+func parseFlexibleDuration(value string) (time.Duration, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, errors.New("duration is empty")
+	}
+	if duration, err := time.ParseDuration(value); err == nil {
+		return duration, nil
+	}
+
+	type unit struct {
+		suffix     string
+		multiplier time.Duration
+	}
+	for _, candidate := range []unit{
+		{suffix: "w", multiplier: 7 * 24 * time.Hour},
+		{suffix: "d", multiplier: 24 * time.Hour},
+	} {
+		if !strings.HasSuffix(value, candidate.suffix) {
+			continue
+		}
+		number := strings.TrimSpace(strings.TrimSuffix(value, candidate.suffix))
+		if number == "" {
+			return 0, errors.New("duration is empty")
+		}
+		amount, err := strconv.ParseFloat(number, 64)
+		if err != nil {
+			return 0, err
+		}
+		return time.Duration(amount * float64(candidate.multiplier)), nil
+	}
+
+	return 0, errors.New("invalid duration")
 }

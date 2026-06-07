@@ -783,10 +783,6 @@ func (a *App) withAuth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if !a.auth.HasUsers() && isReadOnly(r.Method) {
-			next.ServeHTTP(w, r)
-			return
-		}
 		principal, ok := a.auth.Authenticate(r)
 		if !ok {
 			a.recordAudit(r, auth.Principal{Name: "anonymous"}, "auth.authenticate", "http_request", r.URL.Path, "denied", map[string]string{

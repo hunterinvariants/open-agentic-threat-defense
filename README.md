@@ -45,7 +45,7 @@ $env:APPDATA="$PWD\.cache\appdata"
 $env:GOTELEMETRY="off"
 $env:GOCACHE="$PWD\.cache\go-build"
 $env:GOMODCACHE="$PWD\.cache\go-mod"
-go run ./cmd/oadtd --demo
+go run ./cmd/oadtd --demo --addr 127.0.0.1:8080
 ```
 
 Run with Postgres persistence:
@@ -53,19 +53,19 @@ Run with Postgres persistence:
 ```powershell
 docker compose up -d postgres
 $env:OATD_POSTGRES_DSN="postgres://oadtd:oadtd@localhost:5432/oadtd?sslmode=disable"
-go run ./cmd/oadtd --demo --policy configs\example.policy.json
+go run ./cmd/oadtd --demo --addr 127.0.0.1:8080 --policy configs\example.policy.json
 ```
 
 Run with local JSON persistence for development:
 
 ```powershell
-go run ./cmd/oadtd --demo --data .cache\oadtd-state.json
+go run ./cmd/oadtd --demo --addr 127.0.0.1:8080 --data .cache\oadtd-state.json
 ```
 
 Run with an explicit policy configuration:
 
 ```powershell
-go run ./cmd/oadtd --demo --policy configs\example.policy.json
+go run ./cmd/oadtd --demo --addr 127.0.0.1:8080 --policy configs\example.policy.json
 ```
 
 Open:

@@ -42,7 +42,7 @@ func TestWriteEndpointsAcceptBearerToken(t *testing.T) {
 	}
 }
 
-func TestReadEndpointsDoNotRequireToken(t *testing.T) {
+func TestReadEndpointsRequireTokenWhenConfigured(t *testing.T) {
 	app, err := NewWithOptions(Options{APIToken: "secret"})
 	if err != nil {
 		t.Fatalf("new app: %v", err)
@@ -52,8 +52,17 @@ func TestReadEndpointsDoNotRequireToken(t *testing.T) {
 	rec := httptest.NewRecorder()
 	app.Routes().ServeHTTP(rec, req)
 
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/status", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec = httptest.NewRecorder()
+	app.Routes().ServeHTTP(rec, req)
+
 	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rec.Code)
+		t.Fatalf("expected 200 with token, got %d", rec.Code)
 	}
 }
 

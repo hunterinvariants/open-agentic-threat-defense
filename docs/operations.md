@@ -150,7 +150,7 @@ New alerts can be exported to a SIEM or webhook endpoint:
 ```powershell
 $env:OATD_ALERT_WEBHOOK_URL="https://siem.example.invalid/oatd"
 $env:OATD_ALERT_WEBHOOK_TOKEN="replace-with-token"
-go run ./cmd/oadtd --demo
+go run ./cmd/oadtd --demo --addr 127.0.0.1:8080
 ```
 
 The payload type is `oadtd.alerts`.
@@ -160,7 +160,7 @@ Incident ticket creation can be exported to a ticketing webhook transport:
 ```powershell
 $env:OATD_TICKET_WEBHOOK_URL="https://ticketing.example.invalid/oatd"
 $env:OATD_TICKET_WEBHOOK_TOKEN="replace-with-token"
-go run ./cmd/oadtd --demo
+go run ./cmd/oadtd --demo --addr 127.0.0.1:8080
 ```
 
 The payload type is `oadtd.incident_ticket`.
@@ -170,7 +170,7 @@ Approved response actions can also be exported to a response webhook transport:
 ```powershell
 $env:OATD_RESPONSE_WEBHOOK_URL="https://soar.example.invalid/oatd"
 $env:OATD_RESPONSE_WEBHOOK_TOKEN="replace-with-token"
-go run ./cmd/oadtd --demo
+go run ./cmd/oadtd --demo --addr 127.0.0.1:8080
 ```
 
 The payload type is `oadtd.response_action`.
@@ -183,7 +183,7 @@ $env:OATD_GITHUB_OWNER="hunterinvariants"
 $env:OATD_GITHUB_REPO="open-agentic-threat-defense"
 $env:OATD_GITHUB_TOKEN="replace-with-token"
 $env:OATD_GITHUB_WORKFLOW_FILE="runbook.yml"
-go run ./cmd/oadtd --demo
+go run ./cmd/oadtd --demo --addr 127.0.0.1:8080
 ```
 
 Incident plans create GitHub issues. Approved response actions dispatch the
