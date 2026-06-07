@@ -26,6 +26,7 @@ import (
 	"github.com/open-agentic-threat-defense/oadtd/internal/correlator"
 	"github.com/open-agentic-threat-defense/oadtd/internal/domain"
 	"github.com/open-agentic-threat-defense/oadtd/internal/exporter"
+	"github.com/open-agentic-threat-defense/oadtd/internal/license"
 	"github.com/open-agentic-threat-defense/oadtd/internal/policy"
 	"github.com/open-agentic-threat-defense/oadtd/internal/response"
 	"github.com/open-agentic-threat-defense/oadtd/internal/store"
@@ -64,6 +65,7 @@ type App struct {
 	exportErr        string
 	startedAt        time.Time
 	counter          atomic.Uint64
+	licenseStatus    license.Status
 }
 
 type Options struct {
@@ -77,6 +79,8 @@ type Options struct {
 	ThreatPackPath            string
 	PolicyPath                string
 	DeceptionTokens           []domain.DeceptionToken
+	LicenseToken              string
+	LicensePublicKey          string
 	AlertWebhookURL           string
 	AlertWebhookToken         string
 	TicketWebhookURL          string
@@ -201,6 +205,10 @@ func NewWithOptions(options Options) (*App, error) {
 		}
 	}
 	options.Policy.DeceptionTokens = options.DeceptionTokens
+	licenseStatus := license.Community()
+	if token := strings.TrimSpace(options.LicenseToken); token != "" && strings.TrimSpace(options.LicensePublicKey) != "" {
+		licenseStatus = license.Evaluate(token, options.LicensePublicKey, time.Now().UTC())
+	}
 	return &App{
 		store:          st,
 		policy:         policy.New(options.Policy),
@@ -252,6 +260,7 @@ func NewWithOptions(options Options) (*App, error) {
 		mcpUpstreamToken: options.MCPUpstreamToken,
 		oidc:             oidcProvider,
 		startedAt:        time.Now().UTC(),
+		licenseStatus:    licenseStatus,
 	}, nil
 }
 
@@ -270,6 +279,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("/api/policy/reload", a.handlePolicyReload)
 	mux.HandleFunc("/api/deception/tokens", a.handleDeceptionTokens)
 	mux.HandleFunc("/api/timeline", a.handleTimeline)
+	mux.HandleFunc("/api/license", a.handleLicense)
 	mux.HandleFunc("/api/gateway/queue", a.handleGatewayQueue)
 	mux.HandleFunc("/api/gateway/actions/", a.handleGatewayAction)
 	mux.HandleFunc("/api/events", a.handleEvents)
@@ -1342,6 +1352,14 @@ func firstNonEmptyTimeline(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func (a *App) handleLicense(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	writeJSON(w, http.StatusOK, a.licenseStatus)
 }
 
 func (a *App) handleResponseApproval(w http.ResponseWriter, r *http.Request) {

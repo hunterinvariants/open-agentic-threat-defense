@@ -29,6 +29,8 @@ func main() {
 	apiToken := flag.String("api-token", os.Getenv("OATD_API_TOKEN"), "optional API token for write endpoints")
 	threatPackPath := flag.String("threat-pack", os.Getenv("OATD_THREAT_PACK"), "optional threat pack JSON file")
 	deceptionTokensPath := flag.String("deception-tokens", os.Getenv("OATD_DECEPTION_TOKENS"), "optional JSON file of deception/canary tokens")
+	licenseFile := flag.String("license-file", os.Getenv("OATD_LICENSE_FILE"), "path to a commercial license token file")
+	licensePublicKey := flag.String("license-public-key", os.Getenv("OATD_LICENSE_PUBLIC_KEY"), "base64 ed25519 public key to verify the license")
 	alertWebhookURL := flag.String("alert-webhook-url", os.Getenv("OATD_ALERT_WEBHOOK_URL"), "optional SIEM/webhook URL for new alerts")
 	alertWebhookToken := flag.String("alert-webhook-token", os.Getenv("OATD_ALERT_WEBHOOK_TOKEN"), "optional bearer token for alert webhook")
 	ticketWebhookURL := flag.String("ticket-webhook-url", os.Getenv("OATD_TICKET_WEBHOOK_URL"), "optional webhook URL for incident ticket creation")
@@ -120,6 +122,14 @@ func main() {
 			log.Fatal(err)
 		}
 	}
+	licenseToken := ""
+	if value := strings.TrimSpace(*licenseFile); value != "" {
+		data, err := os.ReadFile(value)
+		if err != nil {
+			log.Fatal(err)
+		}
+		licenseToken = strings.TrimSpace(string(data))
+	}
 	retention, err := parseFlexibleDuration(strings.TrimSpace(*retentionWindow))
 	if err != nil {
 		log.Fatal(err)
@@ -136,6 +146,8 @@ func main() {
 		CorrelationWindow:         window,
 		ThreatPackPath:            strings.TrimSpace(*threatPackPath),
 		DeceptionTokens:           deceptionTokens,
+		LicenseToken:              licenseToken,
+		LicensePublicKey:          strings.TrimSpace(*licensePublicKey),
 		AlertWebhookURL:           *alertWebhookURL,
 		AlertWebhookToken:         *alertWebhookToken,
 		TicketWebhookURL:          *ticketWebhookURL,
