@@ -141,6 +141,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("/api/status", a.handleStatus)
 	mux.HandleFunc("/api/session", a.handleSession)
 	mux.HandleFunc("/api/gateway/decide", a.handleGatewayDecision)
+	mux.HandleFunc("/api/gateway/execute", a.handleGatewayExecute)
 	mux.HandleFunc("/api/events", a.handleEvents)
 	mux.HandleFunc("/api/alerts", a.handleAlerts)
 	mux.HandleFunc("/api/assets", a.handleAssets)
@@ -410,6 +411,104 @@ func (a *App) handleGatewayDecision(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, decision)
 }
 
+func (a *App) handleGatewayExecute(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w)
+		return
+	}
+	var req domain.ToolCallRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	a.prepareToolCallRequest(&req)
+
+	decision := a.policy.GateToolCall(req)
+	a.prepareAlerts(decision.Alerts)
+	added, err := a.store.AddAlerts(decision.Alerts)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if len(added) > 0 {
+		a.exportAlerts(added)
+	}
+	decision.Alerts = added
+	decision.RecommendedActions = a.recommendedActionsForAlerts(added)
+
+	principal := principalFromRequest(r)
+	response := domain.ToolExecutionResult{
+		Decision: decision,
+	}
+
+	switch decision.Verdict {
+	case domain.GatewayAllow:
+		action := a.gatewayActionFromDecision(req, decision, "not_required", "executed")
+		a.prepareAction(&action)
+		executed, result, execErr := a.executeGatewayToolAction(r, principal, action, "executed")
+		if execErr != nil {
+			writeError(w, http.StatusInternalServerError, execErr)
+			return
+		}
+		response.Status = executed.ExecutionStatus
+		response.Result = result
+		response.Action = &executed
+		a.recordAudit(r, principal, "gateway.execute", "tool_call", decision.RequestID, "executed", map[string]string{
+			"tool":        decision.ToolName,
+			"asset_id":    req.AssetID,
+			"hostname":    req.Hostname,
+			"risk":        string(decision.Risk),
+			"alerts":      fmt.Sprintf("%d", len(added)),
+			"reason":      decision.Reason,
+			"destination": req.Destination,
+			"action_id":   decisionActionID(response.Action),
+		})
+		writeJSON(w, http.StatusOK, response)
+	case domain.GatewayRequireApproval:
+		action := a.gatewayActionFromDecision(req, decision, "required", "")
+		a.prepareAction(&action)
+		if err := a.store.AddActions([]domain.ResponseAction{action}); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		response.Status = "pending_approval"
+		response.Action = &action
+		a.recordAudit(r, principal, "gateway.execute", "tool_call", decision.RequestID, "pending_approval", map[string]string{
+			"tool":        decision.ToolName,
+			"asset_id":    req.AssetID,
+			"hostname":    req.Hostname,
+			"risk":        string(decision.Risk),
+			"alerts":      fmt.Sprintf("%d", len(added)),
+			"reason":      decision.Reason,
+			"destination": req.Destination,
+			"action_id":   decisionActionID(response.Action),
+		})
+		writeJSON(w, http.StatusAccepted, response)
+	case domain.GatewayDeny:
+		action := a.gatewayActionFromDecision(req, decision, "not_required", "blocked")
+		a.prepareAction(&action)
+		if err := a.store.AddActions([]domain.ResponseAction{action}); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		response.Status = "blocked"
+		response.Action = &action
+		a.recordAudit(r, principal, "gateway.execute", "tool_call", decision.RequestID, "blocked", map[string]string{
+			"tool":        decision.ToolName,
+			"asset_id":    req.AssetID,
+			"hostname":    req.Hostname,
+			"risk":        string(decision.Risk),
+			"alerts":      fmt.Sprintf("%d", len(added)),
+			"reason":      decision.Reason,
+			"destination": req.Destination,
+			"action_id":   decisionActionID(response.Action),
+		})
+		writeJSON(w, http.StatusForbidden, response)
+	default:
+		writeError(w, http.StatusInternalServerError, errors.New("unknown gateway verdict"))
+	}
+}
+
 func (a *App) handleAlerts(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		methodNotAllowed(w)
@@ -618,7 +717,8 @@ func (a *App) executeTicketAction(r *http.Request, principal auth.Principal, act
 
 func (a *App) executeResponseAction(r *http.Request, principal auth.Principal, action domain.ResponseAction) (domain.ResponseAction, error) {
 	if action.Type == "gateway_tool_call" {
-		return a.executeGatewayToolAction(r, principal, action)
+		executed, _, err := a.executeGatewayToolAction(r, principal, action, "proceeded")
+		return executed, err
 	}
 	status := "not_configured"
 	executionError := ""
@@ -665,22 +765,31 @@ func (a *App) executeResponseAction(r *http.Request, principal auth.Principal, a
 	return action, nil
 }
 
-func (a *App) executeGatewayToolAction(r *http.Request, principal auth.Principal, action domain.ResponseAction) (domain.ResponseAction, error) {
+func (a *App) executeGatewayToolAction(r *http.Request, principal auth.Principal, action domain.ResponseAction, status string) (domain.ResponseAction, string, error) {
 	now := time.Now().UTC()
-	if action.ApprovalStatus != "approved" {
+	if status == "proceeded" {
 		action.ApprovalStatus = "approved"
 	}
-	action.ExecutionStatus = "proceeded"
-	action.ExecutionError = ""
+	result, err := a.runGatewayStubTool(action)
+	if err != nil && status != "blocked" {
+		action.ExecutionStatus = "failed"
+		action.ExecutionError = err.Error()
+	} else {
+		action.ExecutionStatus = status
+		action.ExecutionError = ""
+	}
 	action.ExecutedAt = &now
 	if action.Metadata == nil {
 		action.Metadata = make(map[string]string)
 	}
-	action.Metadata["gateway_execution"] = "proceeded"
+	action.Metadata["gateway_execution"] = action.ExecutionStatus
 	action.Metadata["gateway_executed_at"] = now.Format(time.RFC3339)
-	recorded, ok, err := a.store.RecordActionExecution(action.ID, now, action.ExecutionStatus, action.ExecutionError)
-	if err != nil {
-		return domain.ResponseAction{}, err
+	if result != "" {
+		action.Metadata["gateway_result"] = result
+	}
+	recorded, ok, persistErr := a.store.RecordActionExecution(action.ID, now, action.ExecutionStatus, action.ExecutionError)
+	if persistErr != nil {
+		return domain.ResponseAction{}, "", persistErr
 	}
 	if ok {
 		action = recorded
@@ -694,7 +803,33 @@ func (a *App) executeGatewayToolAction(r *http.Request, principal auth.Principal
 		"verdict":    action.Metadata["verdict"],
 		"execution":  action.ExecutionStatus,
 	})
-	return action, nil
+	return action, result, nil
+}
+
+func (a *App) runGatewayStubTool(action domain.ResponseAction) (string, error) {
+	tool := strings.ToLower(strings.TrimSpace(action.Target))
+	asset := strings.TrimSpace(action.AssetID)
+	switch tool {
+	case "asset_inventory":
+		if asset == "" {
+			asset = "unknown"
+		}
+		return fmt.Sprintf("inventory completed for %s", asset), nil
+	case "ticket_create":
+		if asset == "" {
+			asset = "unknown"
+		}
+		return fmt.Sprintf("ticket stub created for %s", asset), nil
+	case "policy_read":
+		return "policy manifest returned", nil
+	case "siem_search":
+		if asset == "" {
+			asset = "all-assets"
+		}
+		return fmt.Sprintf("search completed for %s", asset), nil
+	default:
+		return fmt.Sprintf("tool %s executed", tool), nil
+	}
 }
 
 func (a *App) ingest(events []domain.Event) ([]domain.Alert, error) {

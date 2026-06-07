@@ -242,6 +242,9 @@ func RequiredRoles(method string, path string) []string {
 	if path == "/api/gateway/decide" {
 		return []string{RoleIngestor, RoleAnalyst, RoleOperator}
 	}
+	if path == "/api/gateway/execute" {
+		return []string{RoleIngestor, RoleAnalyst, RoleOperator}
+	}
 	if method == http.MethodGet || method == http.MethodHead || method == http.MethodOptions {
 		return []string{RoleViewer, RoleAnalyst, RoleOperator, RoleIngestor}
 	}

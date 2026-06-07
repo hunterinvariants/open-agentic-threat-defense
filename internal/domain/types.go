@@ -93,6 +93,13 @@ type ToolCallDecision struct {
 	Metadata           map[string]string `json:"metadata,omitempty"`
 }
 
+type ToolExecutionResult struct {
+	Decision ToolCallDecision `json:"decision"`
+	Status   string           `json:"status"`
+	Result   string           `json:"result,omitempty"`
+	Action   *ResponseAction  `json:"action,omitempty"`
+}
+
 type AlertStatus string
 
 const (

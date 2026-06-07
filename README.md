@@ -15,8 +15,8 @@ malware behavior, or autonomous propagation. Demo data generates telemetry only.
   fallback for local development.
 - Policy engine for agent-tool abuse, secret exposure, unexpected egress,
   discovery behavior, deception hits, and suspicious model runtime activity.
-- Inline tool-call gateway for allow, deny, and require-approval decisions
-  before an agent action reaches a tool boundary.
+- Inline tool-call PEP for enforce-before-execute decisions at the tool
+  boundary, backed by a separate PDP endpoint for diagnostics.
 - Correlator for multi-signal sequences such as discovery, credential touch,
   agent tool call, and outbound flow.
 - Dry-run response planner for host isolation, egress blocking, tool disabling,
@@ -143,7 +143,7 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8080/api/events -ContentTyp
 Gate a tool call before execution:
 
 ```powershell
-Invoke-RestMethod -Method Post -Uri http://localhost:8080/api/gateway/decide -ContentType application/json -Body '{
+Invoke-RestMethod -Method Post -Uri http://localhost:8080/api/gateway/execute -ContentType application/json -Body '{
   "asset_id": "dev-agent-01",
   "hostname": "dev-agent-01",
   "actor": "local-agent",
@@ -169,6 +169,7 @@ Useful endpoints:
 - `GET /readyz`
 - `GET /api/status`
 - `POST /api/gateway/decide`
+- `POST /api/gateway/execute`
 - `GET /api/events`
 - `POST /api/events`
 - `GET /api/alerts`

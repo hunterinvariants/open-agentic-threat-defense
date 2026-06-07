@@ -334,27 +334,29 @@ func wedgeDemo(args []string) error {
 
 	fmt.Println("wedge-demo:")
 	for _, tc := range cases {
-		decision, err := postGatewayDecision(client, *baseURL, *token, tc.req)
+		result, err := postGatewayExecution(client, *baseURL, *token, tc.req)
 		if err != nil {
 			return fmt.Errorf("%s: %w", tc.name, err)
 		}
-		switch decision.Verdict {
+		switch result.Status {
 		case "allow":
 			fmt.Printf("- %s: allow -> proceed\n", tc.name)
-		case "deny":
-			fmt.Printf("- %s: deny -> alerts=%d evidence=%s\n", tc.name, len(decision.Alerts), decision.Reason)
-		case "require_approval":
-			if decision.Action == nil {
+		case "executed":
+			fmt.Printf("- %s: allow -> result=%s\n", tc.name, result.Result)
+		case "blocked":
+			fmt.Printf("- %s: deny -> alerts=%d evidence=%s\n", tc.name, len(result.Decision.Alerts), result.Decision.Reason)
+		case "pending_approval":
+			if result.Action == nil {
 				return fmt.Errorf("%s: approval verdict without action", tc.name)
 			}
-			fmt.Printf("- %s: require approval -> pending action %s\n", tc.name, decision.Action.ID)
-			approved, err := approveGatewayAction(client, *baseURL, *token, decision.Action.ID, *approvedBy)
+			fmt.Printf("- %s: require approval -> pending action %s\n", tc.name, result.Action.ID)
+			approved, err := approveGatewayAction(client, *baseURL, *token, result.Action.ID, *approvedBy)
 			if err != nil {
 				return fmt.Errorf("%s approve: %w", tc.name, err)
 			}
 			fmt.Printf("  approved by %s -> execution=%s\n", *approvedBy, approved.ExecutionStatus)
 		default:
-			return fmt.Errorf("%s: unexpected verdict %s", tc.name, decision.Verdict)
+			return fmt.Errorf("%s: unexpected status %s", tc.name, result.Status)
 		}
 	}
 	return nil
@@ -391,15 +393,15 @@ func openOutput(filePath string) (io.Writer, func(), error) {
 	return file, func() { _ = file.Close() }, nil
 }
 
-func postGatewayDecision(client *http.Client, baseURL string, token string, request domain.ToolCallRequest) (domain.ToolCallDecision, error) {
+func postGatewayExecution(client *http.Client, baseURL string, token string, request domain.ToolCallRequest) (domain.ToolExecutionResult, error) {
 	body, err := json.Marshal(request)
 	if err != nil {
-		return domain.ToolCallDecision{}, err
+		return domain.ToolExecutionResult{}, err
 	}
-	endpoint := strings.TrimRight(baseURL, "/") + "/api/gateway/decide"
+	endpoint := strings.TrimRight(baseURL, "/") + "/api/gateway/execute"
 	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return domain.ToolCallDecision{}, err
+		return domain.ToolExecutionResult{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if token != "" {
@@ -408,20 +410,29 @@ func postGatewayDecision(client *http.Client, baseURL string, token string, requ
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return domain.ToolCallDecision{}, err
+		return domain.ToolExecutionResult{}, err
 	}
 	defer resp.Body.Close()
 
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return domain.ToolCallDecision{}, fmt.Errorf("POST %s returned %s: %s", endpoint, resp.Status, strings.TrimSpace(string(respBody)))
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted && resp.StatusCode != http.StatusForbidden {
+		return domain.ToolExecutionResult{}, fmt.Errorf("POST %s returned %s: %s", endpoint, resp.Status, strings.TrimSpace(string(respBody)))
 	}
 
-	var decision domain.ToolCallDecision
-	if err := json.Unmarshal(respBody, &decision); err != nil {
-		return domain.ToolCallDecision{}, err
+	var result domain.ToolExecutionResult
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return domain.ToolExecutionResult{}, err
 	}
-	return decision, nil
+	if result.Status == "" {
+		if resp.StatusCode == http.StatusForbidden {
+			result.Status = "blocked"
+		} else if resp.StatusCode == http.StatusAccepted {
+			result.Status = "pending_approval"
+		} else {
+			result.Status = "executed"
+		}
+	}
+	return result, nil
 }
 
 func approveGatewayAction(client *http.Client, baseURL string, token string, actionID string, approvedBy string) (domain.ResponseAction, error) {

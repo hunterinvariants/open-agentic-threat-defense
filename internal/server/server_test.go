@@ -352,6 +352,146 @@ func TestGatewayDecisionRequiresTokenWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestGatewayExecuteRequiresTokenWhenConfigured(t *testing.T) {
+	app, err := NewWithOptions(Options{APIToken: "secret"})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/execute", strings.NewReader(`{"tool_name":"asset_inventory"}`))
+	rec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+}
+
+func TestGatewayExecuteEndpointExecutesAllowedTool(t *testing.T) {
+	app, err := NewWithOptions(Options{})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/execute", strings.NewReader(`{
+		"id":"gw-1",
+		"asset_id":"agent-1",
+		"hostname":"agent-1",
+		"actor":"local-agent",
+		"tool_name":"asset_inventory",
+		"command":"inventory scan"
+	}`))
+	rec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var result struct {
+		Status   string `json:"status"`
+		Result   string `json:"result"`
+		Decision struct {
+			Verdict string `json:"verdict"`
+		} `json:"decision"`
+		Action struct {
+			ID              string `json:"id"`
+			ExecutionStatus string `json:"execution_status"`
+		} `json:"action"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode execute response: %v", err)
+	}
+	if result.Status != "executed" || result.Decision.Verdict != "allow" || result.Result == "" {
+		t.Fatalf("unexpected execute response: %#v", result)
+	}
+	if result.Action.ID == "" || result.Action.ExecutionStatus != "executed" {
+		t.Fatalf("expected executed action, got %#v", result.Action)
+	}
+}
+
+func TestGatewayExecuteEndpointQueuesApproval(t *testing.T) {
+	app, err := NewWithOptions(Options{})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/execute", strings.NewReader(`{
+		"asset_id":"agent-1",
+		"hostname":"agent-1",
+		"actor":"local-agent",
+		"tool_name":"asset_inventory",
+		"command":"inspect inventory",
+		"arguments":"token=abc123"
+	}`))
+	rec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var result struct {
+		Status string `json:"status"`
+		Action struct {
+			ID              string `json:"id"`
+			ApprovalStatus  string `json:"approval_status"`
+			ExecutionStatus string `json:"execution_status"`
+		} `json:"action"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode execute response: %v", err)
+	}
+	if result.Status != "pending_approval" || result.Action.ID == "" || result.Action.ApprovalStatus != "required" {
+		t.Fatalf("unexpected pending response: %#v", result)
+	}
+
+	approveReq := httptest.NewRequest(http.MethodPost, "/api/responses/approve", strings.NewReader(`{"action_id":"`+result.Action.ID+`","approved_by":"alice"}`))
+	approveRec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(approveRec, approveReq)
+	if approveRec.Code != http.StatusAccepted {
+		t.Fatalf("expected approval 202, got %d: %s", approveRec.Code, approveRec.Body.String())
+	}
+	var approved struct {
+		ExecutionStatus string `json:"execution_status"`
+	}
+	if err := json.Unmarshal(approveRec.Body.Bytes(), &approved); err != nil {
+		t.Fatalf("decode approval: %v", err)
+	}
+	if approved.ExecutionStatus != "proceeded" {
+		t.Fatalf("expected gateway execution to proceed, got %#v", approved)
+	}
+}
+
+func TestGatewayExecuteEndpointBlocksCanary(t *testing.T) {
+	app, err := NewWithOptions(Options{})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/gateway/execute", strings.NewReader(`{
+		"asset_id":"agent-1",
+		"hostname":"agent-1",
+		"actor":"local-agent",
+		"tool_name":"asset_inventory",
+		"command":"read protected vault",
+		"labels":["canary","deception"]
+	}`))
+	rec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var result struct {
+		Status string `json:"status"`
+		Action struct {
+			ID              string `json:"id"`
+			ExecutionStatus string `json:"execution_status"`
+		} `json:"action"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode execute response: %v", err)
+	}
+	if result.Status != "blocked" || result.Action.ID == "" || result.Action.ExecutionStatus != "blocked" {
+		t.Fatalf("unexpected blocked response: %#v", result)
+	}
+}
+
 func TestSessionLoginAndLogout(t *testing.T) {
 	app, err := NewWithOptions(Options{
 		Users: []auth.UserConfig{{Name: "alice", TokenHash: auth.HashToken("secret"), Roles: []string{auth.RoleOperator}}},

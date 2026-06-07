@@ -70,18 +70,19 @@ If no policy file is supplied, the built-in defaults are used.
 
 ### Inline Gateway
 
-The Wedge is an inline tool-call gateway that sits in front of agent
-execution. `POST /api/gateway/decide` evaluates a proposed tool call and
-returns one of three verdicts before the tool can run:
+The Wedge is an inline tool-call policy enforcement point that sits in front
+of agent execution. `POST /api/gateway/execute` evaluates a proposed tool call
+and enforces one of three outcomes before the tool can run:
 
-- `allow`
-- `deny`
-- `require_approval`
+- `executed`
+- `blocked`
+- `pending_approval`
 
-The gateway reuses the same policy engine, alert store, audit log, and response
-planner as the rest of the service. It adds evidence at the decision point
-instead of only after telemetry arrives. That gives the product a control-point
-shape that is distinct from a pure SOC/XDR telemetry platform.
+`POST /api/gateway/decide` remains the diagnostic PDP endpoint. The execution
+path reuses the same policy engine, alert store, audit log, and response
+planner as the rest of the service, but it now actually gates and executes the
+allowed stub tool. That gives the product a control-point shape that is
+distinct from a pure SOC/XDR telemetry platform.
 
 Require-approval and deny outcomes create a persisted gateway action record so
 the decision path is visible in the same approval queue and audit trail as the
