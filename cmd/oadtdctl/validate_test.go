@@ -115,6 +115,30 @@ func splitNonEmptyLines(s string) []string {
 	return out
 }
 
+func TestRunValidationCarriesAgentIdentity(t *testing.T) {
+	seen := map[string]string{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/readyz" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		var req domain.ToolCallRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.AgentID != "" {
+			seen[req.AgentID] = req.AgentToken
+		}
+		_ = json.NewEncoder(w).Encode(domain.ToolCallDecision{Verdict: domain.GatewayAllow})
+	}))
+	defer srv.Close()
+
+	if _, err := runValidation(srv.Client(), srv.URL, "", "asset", 0, agentClaim{id: "val-agent", token: "secret"}); err != nil {
+		t.Fatalf("runValidation error: %v", err)
+	}
+	if seen["val-agent"] != "secret" {
+		t.Fatalf("expected emulations to carry agent id/token, saw %#v", seen)
+	}
+}
+
 func TestWriteResultFileRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "out.json")

@@ -45,6 +45,9 @@ func validateCommand(args []string) error {
 	output := fs.String("output", os.Getenv("OATD_VALIDATE_OUTPUT"), "write the JSON result to this file after each run")
 	history := fs.String("history", os.Getenv("OATD_VALIDATE_HISTORY"), "append a compact JSON summary line to this file after each run (for trend history)")
 	readyWait := fs.Duration("ready-wait", 15*time.Second, "wait up to this long for the server /readyz before validating (0 to disable)")
+	agentID := fs.String("agent-id", os.Getenv("OATD_VALIDATE_AGENT_ID"), "agent identity to present on emulations (for deployments enforcing agent_identities)")
+	agentToken := fs.String("agent-token", os.Getenv("OATD_VALIDATE_AGENT_TOKEN"), "agent identity token to present on emulations")
+	agentTokenFile := fs.String("agent-token-file", "", "read the agent identity token from a file (overrides --agent-token)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -58,13 +61,22 @@ func validateCommand(args []string) error {
 		tok = strings.TrimSpace(string(data))
 	}
 
+	claim := agentClaim{id: strings.TrimSpace(*agentID), token: *agentToken}
+	if strings.TrimSpace(*agentTokenFile) != "" {
+		data, err := os.ReadFile(*agentTokenFile)
+		if err != nil {
+			return fmt.Errorf("read agent token file: %w", err)
+		}
+		claim.token = strings.TrimSpace(string(data))
+	}
+
 	client := &http.Client{Timeout: 15 * time.Second}
 
 	if *continuous {
-		return runContinuousValidation(client, *baseURL, tok, *asset, *interval, *webhook, *webhookToken, *output, *history, *readyWait)
+		return runContinuousValidation(client, *baseURL, tok, *asset, *interval, *webhook, *webhookToken, *output, *history, *readyWait, claim)
 	}
 
-	result, err := runValidation(client, *baseURL, tok, *asset, *readyWait)
+	result, err := runValidation(client, *baseURL, tok, *asset, *readyWait, claim)
 	if err != nil {
 		return err
 	}
@@ -246,7 +258,17 @@ func waitForReady(client *http.Client, baseURL string, maxWait time.Duration) {
 // deterministic and order-independent, which matters for --continuous mode where
 // accumulated history would otherwise escalate the benign baseline into a
 // spurious "regression".
-func runValidation(client *http.Client, baseURL, token, baseAsset string, readyWait time.Duration) (validationResult, error) {
+// agentClaim is the optional validation-agent identity presented on every
+// emulation, so the suite still passes when a deployment enforces
+// agent_identities (register this identity and the calls verify; the threat
+// cases still fire on their content, since a verified identity does not downgrade
+// detection).
+type agentClaim struct {
+	id    string
+	token string
+}
+
+func runValidation(client *http.Client, baseURL, token, baseAsset string, readyWait time.Duration, claim agentClaim) (validationResult, error) {
 	if readyWait > 0 {
 		waitForReady(client, baseURL, readyWait)
 	}
@@ -258,6 +280,10 @@ func runValidation(client *http.Client, baseURL, token, baseAsset string, readyW
 			c.req.Metadata = make(map[string]string, 1)
 		}
 		c.req.Metadata["run_id"] = fmt.Sprintf("val-%d-%d", nonce, i)
+		if claim.id != "" {
+			c.req.AgentID = claim.id
+			c.req.AgentToken = claim.token
+		}
 		decision, err := postGatewayDecision(client, baseURL, token, c.req)
 		if err != nil {
 			return validationResult{}, fmt.Errorf("%s: %w", c.name, err)
@@ -348,7 +374,7 @@ func printCoverageJSON(res validationResult) {
 // runContinuousValidation re-runs the suite every interval and alerts on
 // regression. It is designed to run as a long-lived service; for systemd-timer
 // deployments use the one-shot mode instead (its non-zero exit gates OnFailure).
-func runContinuousValidation(client *http.Client, baseURL, token, baseAsset string, interval time.Duration, webhook, webhookToken, output, history string, readyWait time.Duration) error {
+func runContinuousValidation(client *http.Client, baseURL, token, baseAsset string, interval time.Duration, webhook, webhookToken, output, history string, readyWait time.Duration, claim agentClaim) error {
 	if interval <= 0 {
 		interval = time.Hour
 	}
@@ -357,7 +383,7 @@ func runContinuousValidation(client *http.Client, baseURL, token, baseAsset stri
 	fmt.Printf("oadtdctl validate — continuous detection monitor (interval=%s)\n", interval)
 
 	runOnce := func() {
-		res, err := runValidation(client, baseURL, token, baseAsset, readyWait)
+		res, err := runValidation(client, baseURL, token, baseAsset, readyWait, claim)
 		ts := time.Now().UTC().Format(time.RFC3339)
 		if err != nil {
 			fmt.Printf("[%s] ERROR %v\n", ts, err)
