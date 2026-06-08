@@ -311,12 +311,26 @@ func normalizeUsers(users []UserConfig) []UserConfig {
 	return normalized
 }
 
+var knownRoles = map[string]struct{}{
+	RoleViewer:   {},
+	RoleIngestor: {},
+	RoleAnalyst:  {},
+	RoleOperator: {},
+	RoleAdmin:    {},
+}
+
 func normalizeRoles(roles []string) []string {
 	seen := map[string]struct{}{}
 	normalized := []string{}
 	for _, role := range roles {
 		role = strings.ToLower(strings.TrimSpace(role))
 		if role == "" {
+			continue
+		}
+		// Only honor roles in the known application set. IdP/SSO role and group
+		// claims are attacker-influenceable, so an unmapped or injected role
+		// string must not silently grant access.
+		if _, ok := knownRoles[role]; !ok {
 			continue
 		}
 		if _, ok := seen[role]; ok {

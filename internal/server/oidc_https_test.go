@@ -31,6 +31,25 @@ func TestRequireSecureOIDCEndpoint(t *testing.T) {
 	}
 }
 
+// M6: a multi-valued audience requires an azp check.
+func TestAudienceIsMultiValued(t *testing.T) {
+	if !audienceIsMultiValued([]any{"client-a", "client-b"}) {
+		t.Fatal("a 2-element aud array must be multi-valued")
+	}
+	if !audienceIsMultiValued([]string{"a", "b"}) {
+		t.Fatal("a 2-element string aud array must be multi-valued")
+	}
+	if audienceIsMultiValued([]any{"client-a"}) {
+		t.Fatal("a single-element aud array is not multi-valued")
+	}
+	if audienceIsMultiValued("client-a") {
+		t.Fatal("a string aud is not multi-valued")
+	}
+	if audienceIsMultiValued(nil) {
+		t.Fatal("a nil aud is not multi-valued")
+	}
+}
+
 func TestNewOIDCProviderRejectsPlainHTTPIssuer(t *testing.T) {
 	// A plain-http issuer must be rejected before any network discovery fetch.
 	_, err := newOIDCProvider(

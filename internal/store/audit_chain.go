@@ -161,14 +161,19 @@ func (s *Store) auditChainSnapshotForTenantLocked(tenant string) AuditChainSnaps
 }
 
 func auditChainAnchorKey() []byte {
-	secret := strings.TrimSpace(os.Getenv("OATD_AUDIT_HMAC_SECRET"))
-	if secret == "" {
-		secret = strings.TrimSpace(os.Getenv("OATD_SESSION_SECRET"))
+	if secret := strings.TrimSpace(os.Getenv("OATD_AUDIT_HMAC_SECRET")); secret != "" {
+		return []byte(secret)
 	}
-	if secret == "" {
-		return nil
+	// Fall back to deriving a domain-separated key from the session secret rather
+	// than reusing it raw, so the audit-anchor HMAC and the session-signing HMAC
+	// are cryptographically independent: learning the raw session secret no longer
+	// lets an attacker forge a valid audit anchor over a tampered head.
+	if secret := strings.TrimSpace(os.Getenv("OATD_SESSION_SECRET")); secret != "" {
+		mac := hmac.New(sha256.New, []byte(secret))
+		_, _ = mac.Write([]byte("oatd-audit-chain-anchor-v1"))
+		return mac.Sum(nil)
 	}
-	return []byte(secret)
+	return nil
 }
 
 func auditChainAnchorValue(head string, chainIndex int, valid bool) string {

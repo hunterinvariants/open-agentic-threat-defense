@@ -283,6 +283,12 @@ func (p *oidcProvider) verifyIDToken(idToken string, nonce string) (map[string]a
 	if !claimHasAudience(claims["aud"], p.clientID) {
 		return nil, errors.New("oidc audience mismatch")
 	}
+	// OIDC Core 3.1.3.7: when the token has multiple audiences, azp MUST be
+	// present and equal to this client_id, otherwise a token issued to a
+	// different relying party (that also lists this client in aud) would pass.
+	if audienceIsMultiValued(claims["aud"]) && claimString(claims, "azp") != p.clientID {
+		return nil, errors.New("oidc azp must equal client_id for a multi-audience token")
+	}
 	if exp := claimUnix(claims["exp"]); exp > 0 && time.Now().UTC().After(time.Unix(exp, 0)) {
 		return nil, errors.New("oidc token expired")
 	}
@@ -508,6 +514,17 @@ func claimStrings(claims map[string]any, key string) []string {
 		return compactStrings(values)
 	default:
 		return compactStrings([]string{strings.TrimSpace(fmt.Sprint(v))})
+	}
+}
+
+func audienceIsMultiValued(value any) bool {
+	switch v := value.(type) {
+	case []any:
+		return len(v) > 1
+	case []string:
+		return len(v) > 1
+	default:
+		return false
 	}
 }
 
