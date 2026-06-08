@@ -70,10 +70,10 @@ jobs:
           SERVICE: ${{ inputs.service }}
           READY_PATH: ${{ inputs.ready_path }}
         run: |
-          sudo env \
-            DEPLOY_SOURCE_DIR="$GITHUB_WORKSPACE/dist" \
-            DEPLOY_TARGET_DIR="/opt/oadtd" \
-            DEPLOY_SERVICE="$SERVICE" \
-            DEPLOY_READY_PATH="$READY_PATH" \
-            DEPLOY_RELEASE_ID="$RELEASE_ID" \
-            bash scripts/deploy-release.sh
+          # The runner runs as a non-root user and may sudo only the fixed,
+          # root-owned deploy wrapper (not arbitrary commands).
+          sudo /usr/local/sbin/oadtd-deploy \
+            "$GITHUB_WORKSPACE/dist" \
+            "${SERVICE:-oadtd}" \
+            "${READY_PATH:-/readyz}" \
+            "$RELEASE_ID"

@@ -91,11 +91,20 @@ else
     --replace
 fi
 
-cat >/etc/sudoers.d/oadtd-runner <<'EOF'
-runner ALL=(root) NOPASSWD: /usr/bin/install, /bin/ln, /bin/rm, /bin/chown, /usr/bin/systemctl, /bin/systemctl, /usr/bin/journalctl
+# Install the fixed, root-owned deploy entrypoint and deploy script so the runner
+# can sudo only the wrapper, not arbitrary privileged commands.
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+install -d -m 0755 /opt/oadtd/bin
+install -m 0755 "$script_dir/deploy-release.sh" /opt/oadtd/bin/deploy-release.sh
+install -m 0755 "$script_dir/oadtd-deploy-wrapper.sh" /usr/local/sbin/oadtd-deploy
+chown root:root /opt/oadtd/bin/deploy-release.sh /usr/local/sbin/oadtd-deploy
+
+cat >/etc/sudoers.d/oadtd-runner <<EOF
+$runner_user ALL=(root) NOPASSWD: /usr/local/sbin/oadtd-deploy
 EOF
 chmod 0440 /etc/sudoers.d/oadtd-runner
 
-sudo bash -lc "cd '$runner_dir' && ./svc.sh install"
+# Run the runner service as the non-root runner user (not as root).
+sudo bash -lc "cd '$runner_dir' && ./svc.sh install '$runner_user'"
 sudo bash -lc "cd '$runner_dir' && ./svc.sh start"
 sudo bash -lc "cd '$runner_dir' && ./svc.sh status"
