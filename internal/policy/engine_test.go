@@ -248,3 +248,35 @@ func TestGateToolCallDeniesUnapprovedTool(t *testing.T) {
 		t.Fatalf("expected unapproved tool alert, got %#v", decision.Alerts)
 	}
 }
+
+func TestGateToolCallRequiresApprovalForLateralMovement(t *testing.T) {
+	engine := NewDefault()
+
+	decision := engine.GateToolCall(domain.ToolCallRequest{
+		ID:       "gw-lat",
+		AssetID:  "host-1",
+		Actor:    "agent-1",
+		ToolName: "asset_inventory",
+		Command:  "psexec dc01 -accepteula -s cmd",
+	})
+
+	if decision.Verdict != domain.GatewayRequireApproval {
+		t.Fatalf("expected require_approval for lateral movement, got %s", decision.Verdict)
+	}
+}
+
+func TestGateToolCallRequiresApprovalForImpact(t *testing.T) {
+	engine := NewDefault()
+
+	decision := engine.GateToolCall(domain.ToolCallRequest{
+		ID:       "gw-imp",
+		AssetID:  "host-1",
+		Actor:    "agent-1",
+		ToolName: "asset_inventory",
+		Command:  "vssadmin delete shadows /all /quiet",
+	})
+
+	if decision.Verdict != domain.GatewayRequireApproval {
+		t.Fatalf("expected require_approval for impact action, got %s", decision.Verdict)
+	}
+}

@@ -44,6 +44,7 @@ type App struct {
 	webDir                 string
 	policyPath             string
 	validationResultPath   string
+	validationHistoryPath  string
 	threatPackPath         string
 	auth                   *auth.Authenticator
 	trustedProxies         []*net.IPNet
@@ -83,6 +84,7 @@ type Options struct {
 	ThreatPackPath            string
 	PolicyPath                string
 	ValidationResultPath      string
+	ValidationHistoryPath     string
 	DeceptionTokens           []domain.DeceptionToken
 	TenantPolicies            []policy.TenantPolicy
 	LicenseToken              string
@@ -221,21 +223,22 @@ func NewWithOptions(options Options) (*App, error) {
 		policyEngine.SetTenantPolicy(tenantPolicy)
 	}
 	return &App{
-		store:                st,
-		policy:               policyEngine,
-		correlator:           correlator.New(options.CorrelationWindow),
-		responder:            response.NewDryRun(),
-		webDir:               options.WebDir,
-		policyPath:           strings.TrimSpace(options.PolicyPath),
-		validationResultPath: strings.TrimSpace(options.ValidationResultPath),
-		threatPackPath:       strings.TrimSpace(options.ThreatPackPath),
-		auth:                 authenticator,
-		trustedProxies:       trustedProxies,
-		saml:                 samlProvider,
-		instanceName:         defaultString(strings.TrimSpace(options.InstanceName), "primary"),
-		publicURL:            strings.TrimSpace(options.PublicURL),
-		tenantRegistry:       tenantRegistry,
-		gatewayLimiter:       make(chan struct{}, gatewayLimit),
+		store:                 st,
+		policy:                policyEngine,
+		correlator:            correlator.New(options.CorrelationWindow),
+		responder:             response.NewDryRun(),
+		webDir:                options.WebDir,
+		policyPath:            strings.TrimSpace(options.PolicyPath),
+		validationResultPath:  strings.TrimSpace(options.ValidationResultPath),
+		validationHistoryPath: strings.TrimSpace(options.ValidationHistoryPath),
+		threatPackPath:        strings.TrimSpace(options.ThreatPackPath),
+		auth:                  authenticator,
+		trustedProxies:        trustedProxies,
+		saml:                  samlProvider,
+		instanceName:          defaultString(strings.TrimSpace(options.InstanceName), "primary"),
+		publicURL:             strings.TrimSpace(options.PublicURL),
+		tenantRegistry:        tenantRegistry,
+		gatewayLimiter:        make(chan struct{}, gatewayLimit),
 		webhook: exporter.Webhook{
 			URL:   options.AlertWebhookURL,
 			Token: options.AlertWebhookToken,
@@ -356,10 +359,42 @@ func (a *App) handleValidationResult(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, errors.New("validation result is not valid JSON"))
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"ran_at": info.ModTime().UTC(),
 		"result": result,
-	})
+	}
+	if a.validationHistoryPath != "" {
+		if hist := readValidationHistory(a.validationHistoryPath, 50); len(hist) > 0 {
+			resp["history"] = hist
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// readValidationHistory returns up to the last `limit` JSONL entries from the
+// validation history file (each a compact run summary). Malformed lines are
+// skipped so a single bad line cannot break the dashboard.
+func readValidationHistory(path string, limit int) []json.RawMessage {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	entries := make([]json.RawMessage, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var raw json.RawMessage
+		if json.Unmarshal([]byte(line), &raw) == nil {
+			entries = append(entries, raw)
+		}
+	}
+	if limit > 0 && len(entries) > limit {
+		entries = entries[len(entries)-limit:]
+	}
+	return entries
 }
 
 func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {

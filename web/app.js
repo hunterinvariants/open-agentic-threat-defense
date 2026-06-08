@@ -43,7 +43,8 @@
   actionsList: document.querySelector("#actions-list"),
   rulesList: document.querySelector("#rules-list"),
   coverageBody: document.querySelector("#coverage-body"),
-  coverageMeta: document.querySelector("#coverage-meta")
+  coverageMeta: document.querySelector("#coverage-meta"),
+  coverageTrend: document.querySelector("#coverage-trend")
 };
 
 const emptyTemplate = document.querySelector("#empty-template");
@@ -315,7 +316,48 @@ function renderRules(rules) {
   });
 }
 
+function renderCoverageTrend(history) {
+  if (!els.coverageTrend) {
+    return;
+  }
+  els.coverageTrend.innerHTML = "";
+  if (!Array.isArray(history) || history.length < 2) {
+    return; // need at least two data points to show a trend
+  }
+  const w = 240;
+  const h = 32;
+  const pad = 3;
+  const n = history.length;
+  const ratio = (e) => {
+    const total = Number(e && e.total) || 0;
+    return total ? (Number(e.passed) || 0) / total : 0;
+  };
+  const points = history
+    .map((e, i) => {
+      const x = pad + (n === 1 ? 0 : (i * (w - 2 * pad)) / (n - 1));
+      const y = pad + (1 - ratio(e)) * (h - 2 * pad);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+  const last = history[n - 1];
+  const lastRatio = ratio(last);
+  const color = lastRatio >= 1 ? "#3fb950" : "#f85149";
+  const lx = (pad + (w - 2 * pad)).toFixed(1);
+  const ly = (pad + (1 - lastRatio) * (h - 2 * pad)).toFixed(1);
+  const fullyGreen = history.filter((e) => Number(e.total) && Number(e.passed) === Number(e.total)).length;
+  const lastPassed = Number(last.passed) || 0;
+  const lastTotal = Number(last.total) || 0;
+  els.coverageTrend.innerHTML = `
+    <svg viewBox="0 0 ${w} ${h}" class="sparkline" role="img" aria-label="Coverage-Trend">
+      <polyline fill="none" stroke="${color}" stroke-width="1.5" points="${points}"></polyline>
+      <circle cx="${lx}" cy="${ly}" r="2.5" fill="${color}"></circle>
+    </svg>
+    <span class="muted">Trend: ${n} Läufe · ${fullyGreen}/${n} voll grün · zuletzt ${lastPassed}/${lastTotal}</span>
+  `;
+}
+
 function renderCoverage(coverage) {
+  renderCoverageTrend(coverage && coverage.history);
   els.coverageBody.innerHTML = "";
   const result = coverage && coverage.result;
   const rows = result && Array.isArray(result.results) ? result.results.slice() : [];

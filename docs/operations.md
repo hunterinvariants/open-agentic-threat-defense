@@ -297,11 +297,14 @@ oadtdctl validate — agent-gateway detection validation
   PASS  T1027        obfuscated-secret       want=>=require_approval     got=require_approval
   PASS  T1140        deobfuscate-execute     want=>=require_approval     got=require_approval
   PASS  T1071.001    web-c2-beacon           want=>=require_approval     got=require_approval
+  PASS  T1021        lateral-movement        want=>=require_approval     got=require_approval
+  PASS  T1490        inhibit-recovery        want=>=require_approval     got=require_approval
+  PASS  T1486        ransomware-impact       want=>=require_approval     got=require_approval
   PASS  T1567        unapproved-egress       want=>=require_approval     got=require_approval
   PASS  T1530        canary-touch            want=>=deny                 got=deny
   PASS  TA0002       unapproved-tool         want=>=deny                 got=deny
 
-Summary: 11/11 held  (0 missed, 0 false positives)
+Summary: 14/14 held  (0 missed, 0 false positives)
 ```
 
 ### ATT&CK coverage map
@@ -320,8 +323,9 @@ For ongoing assurance, validate on a schedule. Two options:
 - **systemd timer (recommended):** install the packaged
   `oadtd-validate.service` (oneshot) and `oadtd-validate.timer`. The service
   reads a least-privilege token via `--token-file /etc/oadtd/validation.token`
-  (make it readable by the `oadtd` user: `chown oadtd:oadtd`, `chmod 600`) and
-  writes the latest result with `--output /var/lib/oadtd/validation-last.json`.
+  (make it readable by the `oadtd` user: `chown oadtd:oadtd`, `chmod 600`),
+  writes the latest result with `--output /var/lib/oadtd/validation-last.json`,
+  and appends a trend point with `--history /var/lib/oadtd/validation-history.jsonl`.
   Enable with `systemctl enable --now oadtd-validate.timer`.
 - **Long-lived monitor:** `oadtdctl validate --continuous --interval 1h
   --webhook https://hooks.example/regress` re-runs the suite on an interval and
@@ -360,19 +364,24 @@ ENV
 systemctl daemon-reload && systemctl enable --now oadtd-validate.timer
 ```
 
-### Coverage in the dashboard
+### Coverage and trend in the dashboard
 
-Point the server at the same result file and the dashboard shows a live
+Point the server at the result and history files and the dashboard shows a live
 **Detection Coverage** panel (`GET /api/gateway/validation`, read-only, viewer
-role). Set `OATD_VALIDATION_RESULT_PATH` in `/etc/oadtd/oadtd.env` and restart:
+role): a per-technique `HELD`/`GAP` list plus a sparkline trend of the held
+ratio over recent runs. Set both paths in `/etc/oadtd/oadtd.env` and restart:
 
 ```bash
-echo 'OATD_VALIDATION_RESULT_PATH=/var/lib/oadtd/validation-last.json' >> /etc/oadtd/oadtd.env
+{
+  echo 'OATD_VALIDATION_RESULT_PATH=/var/lib/oadtd/validation-last.json'
+  echo 'OATD_VALIDATION_HISTORY_PATH=/var/lib/oadtd/validation-history.jsonl'
+} >> /etc/oadtd/oadtd.env
 systemctl restart oadtd
 ```
 
-The panel reads the file the validation timer writes — no re-running of the
-suite on page load, so it never touches the live gateway from the browser.
+The panel reads the files the validation timer writes — no re-running of the
+suite on page load, so it never touches the live gateway from the browser. The
+trend appears once at least two runs have been recorded.
 
 ## Audit Log
 

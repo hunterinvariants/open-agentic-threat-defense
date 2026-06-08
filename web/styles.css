@@ -478,3 +478,17 @@ td {
     font-size: 25px;
   }
 }
+
+.coverage-trend {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.6rem;
+  min-height: 32px;
+}
+
+.coverage-trend .sparkline {
+  width: 240px;
+  height: 32px;
+  flex: 0 0 auto;
+}

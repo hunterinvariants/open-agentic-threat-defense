@@ -16,7 +16,7 @@ WorkingDirectory=/opt/oadtd/current
 # --output writes the latest result for the dashboard endpoint and the alert
 # handler. A detection regression makes oadtdctl exit non-zero, marking this unit
 # failed, which triggers OnFailure=oadtd-validate-alert.service.
-ExecStart=/opt/oadtd/current/oadtdctl validate --url http://127.0.0.1:8080 --token-file /etc/oadtd/validation.token --output /var/lib/oadtd/validation-last.json
+ExecStart=/opt/oadtd/current/oadtdctl validate --url http://127.0.0.1:8080 --token-file /etc/oadtd/validation.token --output /var/lib/oadtd/validation-last.json --history /var/lib/oadtd/validation-history.jsonl
 EnvironmentFile=-/etc/oadtd/validate.env
 ReadWritePaths=/var/lib/oadtd
 

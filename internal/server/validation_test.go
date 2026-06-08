@@ -53,6 +53,47 @@ func TestValidationResultEndpoint(t *testing.T) {
 	}
 }
 
+func TestValidationResultEndpointIncludesHistory(t *testing.T) {
+	dir := t.TempDir()
+	resultPath := filepath.Join(dir, "validation-last.json")
+	historyPath := filepath.Join(dir, "validation-history.jsonl")
+	if err := os.WriteFile(resultPath, []byte(`{"total":2,"passed":2,"missed":0,"false_positives":0,"results":[]}`), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	hist := "" +
+		`{"time":"2026-06-09T10:00:00Z","total":2,"passed":2,"missed":0,"false_positives":0}` + "\n" +
+		`{"time":"2026-06-09T11:00:00Z","total":2,"passed":1,"missed":1,"false_positives":0}` + "\n"
+	if err := os.WriteFile(historyPath, []byte(hist), 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	app, err := NewWithOptions(Options{ValidationResultPath: resultPath, ValidationHistoryPath: historyPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/gateway/validation", nil)
+	rec := httptest.NewRecorder()
+	app.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		History []struct {
+			Total  int `json:"total"`
+			Passed int `json:"passed"`
+		} `json:"history"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("response not JSON: %v", err)
+	}
+	if len(resp.History) != 2 {
+		t.Fatalf("expected 2 history entries, got %d", len(resp.History))
+	}
+	if resp.History[1].Passed != 1 {
+		t.Fatalf("expected last history entry passed=1, got %d", resp.History[1].Passed)
+	}
+}
+
 func TestValidationResultEndpointNotConfigured(t *testing.T) {
 	app, err := NewWithOptions(Options{})
 	if err != nil {

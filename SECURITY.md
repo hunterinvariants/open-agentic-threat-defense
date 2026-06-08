@@ -87,8 +87,9 @@ oadtdctl validate --url https://your-oadtd.example --token "$OATD_API_TOKEN"
 It runs a curated library of **benign, MITRE ATT&CK-mapped** agent tool-call
 emulations (secret access T1552.001, process discovery T1057, file discovery
 T1083, prompt-injection T1059, obfuscated payloads T1027, runtime decode T1140,
-web C2 T1071.001, unapproved egress T1567, deception/canary T1530,
-unapproved-tool TA0002) through the read-only `/api/gateway/decide` path and
+web C2 T1071.001, lateral movement T1021, inhibit-recovery T1490, ransomware
+impact T1486, unapproved egress T1567, deception/canary T1530, unapproved-tool
+TA0002) through the read-only `/api/gateway/decide` path and
 prints a pass/fail scorecard, including a benign baseline to catch false
 positives. It emits **only synthetic descriptive telemetry** — no real commands,
 exploits, or attack payloads are ever executed against any target. Use it after

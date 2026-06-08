@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -74,6 +75,44 @@ func TestWaitForReadyReturnsWhenReady(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("waitForReady did not return promptly when the server is ready")
 	}
+}
+
+func TestAppendHistoryAccumulates(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "history.jsonl")
+	for i := 0; i < 3; i++ {
+		if err := appendHistory(path, validationResult{Total: 3, Passed: 3 - i, Missed: i}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := 0
+	for _, line := range splitNonEmptyLines(string(data)) {
+		var e historyEntry
+		if err := json.Unmarshal([]byte(line), &e); err != nil {
+			t.Fatalf("history line is not valid JSON: %v", err)
+		}
+		if e.Total != 3 || e.Time == "" {
+			t.Fatalf("unexpected history entry: %+v", e)
+		}
+		lines++
+	}
+	if lines != 3 {
+		t.Fatalf("expected 3 appended history lines, got %d", lines)
+	}
+}
+
+func splitNonEmptyLines(s string) []string {
+	var out []string
+	for _, line := range strings.Split(s, "\n") {
+		if strings.TrimSpace(line) != "" {
+			out = append(out, line)
+		}
+	}
+	return out
 }
 
 func TestWriteResultFileRoundTrip(t *testing.T) {

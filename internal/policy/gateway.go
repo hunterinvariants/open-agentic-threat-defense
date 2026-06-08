@@ -223,6 +223,24 @@ func (e *Engine) assessGatewayRequest(request domain.ToolCallRequest, tool strin
 			}
 			findings = append(findings, fmt.Sprintf("discovery_term=%s", term))
 			risk = maxSeverity(risk, domain.SeverityHigh)
+		} else if match, term, variant := gatewayContainsAny(payloadVariants, lateralMovementTerms()); match {
+			verdict = domain.GatewayRequireApproval
+			if variant != term {
+				reason = "obfuscated lateral-movement tooling requires approval"
+			} else {
+				reason = "lateral-movement tooling requires approval"
+			}
+			findings = append(findings, fmt.Sprintf("lateral_term=%s", term))
+			risk = maxSeverity(risk, domain.SeverityHigh)
+		} else if match, term, variant := gatewayContainsAny(payloadVariants, impactTerms()); match {
+			verdict = domain.GatewayRequireApproval
+			if variant != term {
+				reason = "obfuscated destructive/impact action requires approval"
+			} else {
+				reason = "destructive/impact action requires approval"
+			}
+			findings = append(findings, fmt.Sprintf("impact_term=%s", term))
+			risk = maxSeverity(risk, domain.SeverityCritical)
 		} else if hasAlertRule(alerts, "network.egress.unknown") || hasAlertRule(alerts, "process.discovery.chain") || hasAlertRule(alerts, "model.runtime.suspicious") {
 			verdict = domain.GatewayRequireApproval
 			reason = "tool call requires operator approval"
@@ -407,6 +425,42 @@ func injectionTerms() []string {
 		"invoke-expression",
 		"eval(",
 		"cmd /c",
+	}
+}
+
+// lateralMovementTerms flags remote-execution / lateral-movement tooling
+// (MITRE ATT&CK TA0008, e.g. T1021). These are high-signal indicators that an
+// agent is trying to reach another host rather than act locally.
+func lateralMovementTerms() []string {
+	return []string{
+		"psexec",
+		"wmic /node",
+		"enter-pssession",
+		"invoke-command",
+		"new-pssession",
+		"wmiexec",
+		"smbexec",
+		"winrm",
+		"mstsc",
+		"schtasks /s",
+	}
+}
+
+// impactTerms flags destructive / recovery-inhibiting actions (MITRE ATT&CK
+// TA0040, e.g. T1486 data-encrypted-for-impact and T1490 inhibit-recovery).
+// These should never run unattended, so they are gated for operator approval.
+func impactTerms() []string {
+	return []string{
+		"vssadmin delete",
+		"delete shadows",
+		"shadowcopy delete",
+		"wbadmin delete",
+		"bcdedit",
+		"cipher /w",
+		"ransom",
+		".locked",
+		".encrypted",
+		"encrypt all files",
 	}
 }
 
