@@ -51,8 +51,10 @@ func (c Config) PolicyConfig() (policy.Config, error) {
 		pack.ApprovedEgressHosts = append([]string(nil), c.ApprovedEgressHosts...)
 	}
 	return policy.Config{
-		ThreatPack:     pack,
-		ToolProvenance: append([]policy.ToolProvenanceEntry(nil), c.ToolProvenance...),
+		ApprovedTools:       append([]string(nil), c.ApprovedTools...),
+		ApprovedEgressHosts: append([]string(nil), c.ApprovedEgressHosts...),
+		ThreatPack:          pack,
+		ToolProvenance:      append([]policy.ToolProvenanceEntry(nil), c.ToolProvenance...),
 	}, nil
 }
 

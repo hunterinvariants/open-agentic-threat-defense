@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/open-agentic-threat-defense/oadtd/internal/domain"
+	"github.com/open-agentic-threat-defense/oadtd/internal/policy"
 )
 
 func TestLoadConfig(t *testing.T) {
@@ -49,5 +52,31 @@ func TestDefaultCorrelationWindow(t *testing.T) {
 	}
 	if window != DefaultCorrelationWindow {
 		t.Fatalf("unexpected default window: %s", window)
+	}
+}
+
+func TestPolicyConfigAppliesApprovedTools(t *testing.T) {
+	cfg := Config{ApprovedTools: []string{"custom_tool"}}
+	pc, err := cfg.PolicyConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := policy.New(pc)
+
+	// A tool declared in policy.json must be approved (not denied as unapproved).
+	allowed := engine.GateToolCall(domain.ToolCallRequest{
+		ID: "c1", AssetID: "h", Actor: "a", ToolName: "custom_tool", Command: "list",
+	})
+	if allowed.Verdict == domain.GatewayDeny {
+		t.Fatalf("custom approved tool should not be denied, got %s (%s)", allowed.Verdict, allowed.Reason)
+	}
+
+	// A default tool absent from policy.json must now be unapproved: the list is
+	// authoritative (regression guard for the propagation fix).
+	denied := engine.GateToolCall(domain.ToolCallRequest{
+		ID: "c2", AssetID: "h", Actor: "a", ToolName: "ticket_create", Command: "open",
+	})
+	if denied.Verdict != domain.GatewayDeny {
+		t.Fatalf("tool absent from policy.json approved_tools should be denied, got %s", denied.Verdict)
 	}
 }
