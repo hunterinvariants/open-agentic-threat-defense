@@ -24,9 +24,10 @@ func TestThreatPackSignatureRoundTrip(t *testing.T) {
 	t.Setenv("OATD_MANIFEST_HMAC_SECRET", "test-manifest-secret")
 	path, data := writeTempManifest(t)
 
-	// Opt-in: unsigned manifest loads fine when not required.
-	if _, err := LoadThreatPack(path); err != nil {
-		t.Fatalf("unsigned opt-in load should succeed: %v", err)
+	// With a signing key configured, an unsigned manifest now fails closed
+	// (previously a missing signature silently skipped verification).
+	if _, err := LoadThreatPack(path); err == nil {
+		t.Fatal("unsigned load must fail closed when a signing key is configured")
 	}
 
 	// After signing, the manifest verifies and loads.

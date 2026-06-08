@@ -2,6 +2,7 @@ package policy
 
 import (
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"sort"
 	"strings"
@@ -500,26 +501,61 @@ func tokenizeGatewayText(text string) []string {
 }
 
 func decodeGatewayCandidates(token string) []string {
-	if !looksBase64Like(token) {
+	// Decode up to a bounded depth so multi-layer encodings (e.g. base64 of
+	// base64, or base64 of hex) cannot evade the obfuscation matcher with one
+	// extra wrapper. Depth is bounded to keep the gateway hot path cheap.
+	return decodeGatewayCandidatesDepth(token, 3)
+}
+
+func decodeGatewayCandidatesDepth(token string, depth int) []string {
+	if depth <= 0 {
 		return nil
 	}
-	candidates := []string{token}
-	encodings := []*base64.Encoding{
-		base64.StdEncoding,
-		base64.RawStdEncoding,
-		base64.URLEncoding,
-		base64.RawURLEncoding,
-	}
-	for _, encoding := range encodings {
-		decoded, err := encoding.DecodeString(padBase64(token))
-		if err != nil {
-			continue
+	var candidates []string
+	add := func(decoded []byte) {
+		// Keep case for the recursion (an inner base64/hex layer is case- or
+		// nibble-sensitive) but emit the normalized form for matching.
+		raw := printableGatewayBytes(decoded)
+		if strings.TrimSpace(raw) == "" || raw == token {
+			return
 		}
-		if text := printableGatewayText(decoded); text != "" {
-			candidates = append(candidates, text)
+		if normalized := normalizeGatewayText(raw); normalized != "" {
+			candidates = append(candidates, normalized)
+		}
+		candidates = append(candidates, decodeGatewayCandidatesDepth(raw, depth-1)...)
+	}
+	if looksBase64Like(token) {
+		for _, encoding := range []*base64.Encoding{
+			base64.StdEncoding,
+			base64.RawStdEncoding,
+			base64.URLEncoding,
+			base64.RawURLEncoding,
+		} {
+			if decoded, err := encoding.DecodeString(padBase64(token)); err == nil {
+				add(decoded)
+			}
+		}
+	}
+	if looksHexLike(token) {
+		if decoded, err := hex.DecodeString(token); err == nil {
+			add(decoded)
 		}
 	}
 	return candidates
+}
+
+func looksHexLike(token string) bool {
+	if len(token) < 8 || len(token)%2 != 0 {
+		return false
+	}
+	for _, r := range token {
+		switch {
+		case r >= '0' && r <= '9', r >= 'a' && r <= 'f', r >= 'A' && r <= 'F':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func looksBase64Like(token string) bool {
@@ -548,15 +584,20 @@ func padBase64(token string) string {
 	}
 }
 
-func printableGatewayText(decoded []byte) string {
+// printableGatewayBytes keeps only printable runes but preserves case, so a
+// decoded layer that is itself an encoded string can be decoded again.
+func printableGatewayBytes(decoded []byte) string {
 	if len(decoded) == 0 {
 		return ""
 	}
-	text := strings.Map(func(r rune) rune {
+	return strings.Map(func(r rune) rune {
 		if r == '\n' || r == '\r' || r == '\t' || unicode.IsPrint(r) {
 			return r
 		}
 		return -1
 	}, string(decoded))
-	return normalizeGatewayText(text)
+}
+
+func printableGatewayText(decoded []byte) string {
+	return normalizeGatewayText(printableGatewayBytes(decoded))
 }

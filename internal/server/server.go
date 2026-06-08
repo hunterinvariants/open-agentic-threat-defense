@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -2190,7 +2191,15 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 }
 
 func writeError(w http.ResponseWriter, status int, err error) {
-	writeJSON(w, status, map[string]string{"error": err.Error()})
+	message := err.Error()
+	if status == http.StatusInternalServerError {
+		// Never reflect internal error detail (DB schema/driver diagnostics, SQL
+		// fragments, file paths) to clients. Log it server-side and return a
+		// generic message instead.
+		log.Printf("internal error (500) on request: %v", err)
+		message = "internal server error"
+	}
+	writeJSON(w, status, map[string]string{"error": message})
 }
 
 func methodNotAllowed(w http.ResponseWriter) {

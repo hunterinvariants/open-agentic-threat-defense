@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 
@@ -196,21 +197,25 @@ func verifyThreatPackSignature(path string, data []byte) error {
 	sigPath := path + ".sig"
 	sigBytes, sigErr := os.ReadFile(sigPath)
 
-	if required {
-		if len(key) == 0 {
-			return errors.New("signed manifest required but OATD_MANIFEST_HMAC_SECRET is not set")
-		}
+	// If a signing key is configured, signatures are enforced: a missing or
+	// invalid signature fails closed. Previously a missing .sig silently skipped
+	// verification even when a key was set, so a tampered manifest could load.
+	if len(key) > 0 {
 		if sigErr != nil {
-			return fmt.Errorf("signed manifest required but signature %q is missing: %w", sigPath, sigErr)
+			return fmt.Errorf("threat pack signature %q is missing but a signing key is configured: %w", sigPath, sigErr)
 		}
-	} else if len(key) == 0 || sigErr != nil {
+		expected := ManifestSignature(data, key)
+		provided := strings.TrimSpace(string(sigBytes))
+		if !hmac.Equal([]byte(expected), []byte(provided)) {
+			return fmt.Errorf("threat pack signature mismatch for %q", path)
+		}
 		return nil
 	}
 
-	expected := ManifestSignature(data, key)
-	provided := strings.TrimSpace(string(sigBytes))
-	if !hmac.Equal([]byte(expected), []byte(provided)) {
-		return fmt.Errorf("threat pack signature mismatch for %q", path)
+	// No signing key configured.
+	if required {
+		return errors.New("signed manifest required but OATD_MANIFEST_HMAC_SECRET is not set")
 	}
+	log.Printf("warning: loading threat pack %q without signature verification; set OATD_MANIFEST_HMAC_SECRET to enforce", path)
 	return nil
 }
