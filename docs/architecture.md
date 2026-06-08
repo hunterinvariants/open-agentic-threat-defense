@@ -68,7 +68,19 @@ portable Postgres backups.
 Approved agent tools and egress hosts are configurable through `--policy`.
 If no policy file is supplied, the built-in defaults are used.
 The policy engine is packaged as a versioned threat pack so rule content and
-allowlists can evolve together.
+allowlists can evolve together; threat-pack manifests can be HMAC-signed and
+verification fails closed when a signing key is configured.
+
+The policy and threat pack can be hot-reloaded without a restart via `SIGHUP` or
+`POST /api/policy/reload` (admin). A deception/canary token registry is managed
+through `GET/POST/DELETE /api/deception/tokens` and matched inline by the gateway.
+
+**Org-scoped policy sets** let each tenant override the approved-tool and
+approved-egress allowlists. A non-empty overlay fully replaces the global list
+for that tenant's gateway and detection decisions; an omitted dimension falls
+back to global, so a tenant without an overlay is unchanged. Overlays are managed
+through the admin-only `GET/POST/DELETE /api/policy/tenants` endpoint and can be
+seeded at startup with `--tenant-policies`.
 
 ### Inline Gateway
 
@@ -129,9 +141,10 @@ Planned incident-ticket actions are exported immediately to a separate ticket
 connector so operators get a traceable incident record even when a containment
 step still needs approval.
 
-For concrete target systems, GitHub issue creation can stand in for incident
-tracking, and GitHub Actions workflow dispatch can act as the approval-gated
-runbook executor.
+For concrete target systems, native incident connectors create tickets in
+GitHub issues, **Jira** (`/rest/api/2/issue`), or **ServiceNow**
+(`/api/now/table/incident`), dispatched first-enabled-wins, and GitHub Actions
+workflow dispatch can act as the approval-gated runbook executor.
 
 ### Dashboard
 
@@ -155,11 +168,24 @@ per node.
 ### Audit Logging
 
 The HTTP layer records audit events for authentication failures, RBAC denials,
-event ingestion, demo loads, response planning, and response approvals. Audit
-events are first-class store records and are persisted to Postgres table
-`oatd_audit_events` in production mode. Each audit record is chained to the
-previous one with a SHA-256 hash so tampering becomes visible on readback.
+event ingestion, demo loads, policy/tenant changes, gateway decisions, response
+planning, and response approvals. Audit events are first-class store records and
+are persisted to Postgres table `oatd_audit_events` in production mode. Each
+record is chained to the previous one with a SHA-256 hash and the chain head is
+HMAC-anchored with a server-held key. In the Postgres path the chain validity is
+re-derived from the event rows at read time — every record hash is recomputed and
+the `PrevHash` links walked — so database tampering of a non-head record is
+detected at runtime rather than trusted from a stored flag.
 `GET /api/audit/chain` exposes the current chain state.
+
+### Commercial License
+
+Editions are gated by Ed25519-signed license tokens: the vendor issues a token
+with a private key (`oadtdctl license issue`), deployments verify it with the
+embedded public key (`--license-public-key`, `--license-file`), and
+`GET /api/license` reports the edition, features, expiry, and validity. With no
+license configured the service runs as the community edition. The private key
+never ships with the product, so licenses cannot be forged.
 
 ### SIEM/Webhook Export
 

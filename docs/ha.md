@@ -13,11 +13,20 @@ or load balancer.
 
 ## Runtime Rules
 
-- sessions are signed and stateless
-- all shared state lives in Postgres
+- sessions are signed and stateless; the login lockout is shared via Postgres
+- all durable shared state lives in Postgres
 - `/healthz` is process liveness
 - `/readyz` is readiness against Postgres
 - SSO callback URLs must match `--public-url`
+
+### HA caveats
+
+- **Session revocation is per-instance.** Logout revokes a session via an
+  in-memory denylist, so it takes effect only on the instance that served the
+  request; the absolute session max-age still bounds every session globally. A
+  shared revocation store would make logout cluster-wide.
+- **Gateway backpressure is per-instance.** The in-flight limiter is a local
+  semaphore (each replica protects itself), not a global cross-instance cap.
 
 ## Rolling Update
 

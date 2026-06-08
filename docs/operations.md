@@ -51,6 +51,13 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now oadtd
 ```
 
+The packaged unit binds `127.0.0.1:8080` and runs as the non-root `oadtd` user
+under a full systemd sandbox (`ProtectSystem=strict`, `SystemCallFilter`,
+`RestrictAddressFamilies`, empty `CapabilityBoundingSet`, `MemoryDenyWriteExecute`,
+`UMask=0077`, and more — `systemd-analyze security oadtd` ≈ 1.5/OK). Reach the
+dashboard through a reverse proxy or an SSH tunnel
+(`ssh -L 8080:127.0.0.1:8080 host`), and keep `/etc/oadtd/*.env` at mode `0600`.
+
 ## GitHub Deploy
 
 The repository includes a GitHub Actions deployment workflow for reachable
@@ -106,31 +113,31 @@ sudo bash scripts/setup-self-hosted-runner.sh
 ```
 
 The script downloads the latest Linux x64 runner release, registers it against
-the repository, and installs it as a service under the `runner` user. It uses
-`gh auth token` or `GITHUB_TOKEN` to create the runner registration token.
-That GitHub token must have repository admin access so GitHub can create the
-runner registration token.
+the repository, and installs it as a service **running as the non-root `runner`
+user** (not root). It uses `gh auth token` or `GITHUB_TOKEN` (a repository-admin
+token) to create the runner registration token.
 
-The runner user needs passwordless sudo for the deployment steps:
-
-```bash
-sudo visudo -f /etc/sudoers.d/oadtd-runner
-```
-
-Add:
+It also installs a fixed, root-owned deploy entrypoint at
+`/usr/local/sbin/oadtd-deploy` plus a root-owned copy of `deploy-release.sh`
+under `/opt/oadtd/bin/`, and grants the runner passwordless sudo for **only the
+wrapper** — not arbitrary privileged commands:
 
 ```text
-runner ALL=(root) NOPASSWD: /usr/bin/install, /bin/ln, /bin/rm, /bin/chown, /bin/systemctl, /usr/bin/journalctl
+runner ALL=(root) NOPASSWD: /usr/local/sbin/oadtd-deploy
 ```
 
-After the runner is online, trigger the workflow manually from GitHub and it
-will:
+The wrapper validates its inputs and runs the root-owned deploy script, so the
+runner can trigger a deploy of the built artifacts but cannot perform arbitrary
+root actions; a build-time supply-chain compromise is confined to the
+unprivileged runner account. Do not run the runner service as root.
 
-- build the Linux binaries
-- install them under `/opt/oadtd/releases/<sha>`
-- repoint `/opt/oadtd/current`
-- restart `oadtd`
-- verify `GET /readyz`
+After the runner is online, trigger the workflow manually from GitHub (the
+deployable ref is allowlisted to `main` / `vX.Y.Z`) and it will:
+
+- build the Linux binaries (as the non-root runner)
+- call `sudo /usr/local/sbin/oadtd-deploy` to install them under
+  `/opt/oadtd/releases/<sha>`, repoint `/opt/oadtd/current`, restart `oadtd`, and
+  verify `GET /readyz`
 
 ## Windows Service
 
@@ -189,6 +196,21 @@ go run ./cmd/oadtd --demo --addr 127.0.0.1:8080
 
 Incident plans create GitHub issues. Approved response actions dispatch the
 configured workflow file.
+
+Native Jira and ServiceNow connectors create incidents directly when configured:
+
+```text
+OATD_JIRA_BASE_URL=https://your-org.atlassian.net
+OATD_JIRA_EMAIL=bot@your-org.com
+OATD_JIRA_API_TOKEN=replace-with-token
+OATD_JIRA_PROJECT_KEY=SEC
+OATD_SERVICENOW_URL=https://your-instance.service-now.com
+OATD_SERVICENOW_USER=integration.user
+OATD_SERVICENOW_PASSWORD=replace-with-password
+```
+
+Ticket connectors are tried first-enabled-wins: GitHub issue, Jira, ServiceNow,
+then the generic ticket webhook.
 
 ## Storage
 
@@ -249,11 +271,12 @@ go run ./cmd/oadtdctl agent --source journald --journal-unit ssh.service --url h
 ## Audit Log
 
 The service records audit events for authentication failures, RBAC denials,
-event ingestion, demo loads, response planning, and response approvals. Audit
-events are stored in Postgres table `oatd_audit_events` in production mode and
-are exposed through `GET /api/audit`.
-Audit records are hash-chained and the chain state is visible through
-`GET /api/audit/chain`.
+event ingestion, demo loads, policy and tenant changes, gateway decisions,
+response planning, and response approvals. Audit events are stored in Postgres
+table `oatd_audit_events` in production mode and are exposed through
+`GET /api/audit`. Records are hash-chained, HMAC-anchored with a server-held key,
+and (in the Postgres path) re-derived from the rows at read time so DB tampering
+is detected at runtime; the chain state is visible through `GET /api/audit/chain`.
 
 `GET /api/audit` requires `analyst`, `operator`, or `admin`.
 `GET /api/audit/chain` requires `analyst`, `operator`, or `admin`.
@@ -267,7 +290,44 @@ upstreams only after the gate allows them.
 
 The transparent MCP proxy uses `--mcp-upstream-url` and optional
 `--mcp-upstream-token` to forward JSON-RPC MCP traffic through OADTD while the
-gate inspects tool-like calls inline.
+gate inspects tool-like calls inline. The proxy reaches loopback/internal
+upstreams only with the explicit `--proxy-allow-local-targets` flag (off by
+default); both proxy endpoints are refused when authentication is not configured.
+
+## Policy, License, and Deception
+
+Hot-reload the active policy and threat pack without a restart (admin), or send
+`SIGHUP` to the process:
+
+```http
+POST /api/policy/reload
+```
+
+Manage per-tenant org-scoped policy overlays (approved tools / egress); seed them
+at startup with `--tenant-policies`:
+
+```http
+GET/POST/DELETE /api/policy/tenants    # admin
+```
+
+Seed deception/canary tokens with `--deception-tokens` and manage them at
+runtime; a hit is denied inline by the gateway:
+
+```http
+GET/POST/DELETE /api/deception/tokens  # operator
+```
+
+Gate the commercial edition with an Ed25519 license token:
+
+```bash
+oadtdctl license keygen
+oadtdctl license issue --private-key $OATD_LICENSE_PRIVATE_KEY --org "Example" \
+  --features sso,multi-tenant --valid-for 8760h
+# run with --license-file license.token --license-public-key <base64-public-key>
+# status:  GET /api/license   (community edition when none is configured)
+```
+
+A per-asset investigation timeline is available at `GET /api/timeline`.
 
 ## RBAC
 

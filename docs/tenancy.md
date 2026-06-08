@@ -10,6 +10,12 @@ read/write paths are scoped accordingly.
 - per-tenant writes for event ingestion, approval handling, gateway decisions,
   and action execution
 - tenant-scoped RBAC and audit metadata
+- assets are keyed by `(tenant, id)` in memory and as the Postgres primary key,
+  so two tenants sharing an asset id (e.g. a hostname) cannot overwrite each other
+- **org-scoped policy overlays:** per-tenant approved-tool / approved-egress
+  allowlists applied inline in the gateway and detection path, managed through the
+  admin-only `GET/POST/DELETE /api/policy/tenants` endpoint or seeded with
+  `--tenant-policies`
 
 ## Physical Isolation
 
@@ -33,7 +39,10 @@ first use, run with `--tenant-isolation-mode physical` and set one of:
 The dashboard exposes a tenant admin panel through `GET /api/tenants` and
 `POST /api/tenants`, plus per-tenant edit/delete through
 `GET /api/tenants/{tenant}`, `PUT /api/tenants/{tenant}`, and
-`DELETE /api/tenants/{tenant}`.
+`DELETE /api/tenants/{tenant}`. Tenant administration is scoped: listing and
+creating tenants requires a platform admin (admin in the `default` tenant), and
+per-tenant operations require the caller to administer their own tenant or be
+listed in that tenant's `Admins` — admin is not a global wildcard across tenants.
 
 ## Operational Rule
 

@@ -42,6 +42,8 @@ Status: implemented in this repository.
 - Native collector agents for Windows Event Log and Linux journald.
 - CLA automation for pull requests.
 
+Status: implemented in this repository.
+
 ## 3-6 Weeks: Beta
 
 - Multi-tenant control plane.
@@ -53,6 +55,8 @@ Status: implemented in this repository.
 - Windows and Linux packaging.
 - Better asset graph and investigation timeline.
 
+Status: implemented in this repository.
+
 ## 6-10 Weeks: Production Candidate
 
 - Hardening review.
@@ -63,6 +67,10 @@ Status: implemented in this repository.
 - SSO/SAML for the commercial edition.
 - Commercial license workflow.
 - Documentation for deployment, operations, and incident response.
+
+Status: implemented in this repository, including a full security audit with all
+findings remediated and the host/CI deploy chain hardened (see
+[hardening.md](hardening.md) and [threat-model.md](threat-model.md)).
 
 ## Product Positioning
 

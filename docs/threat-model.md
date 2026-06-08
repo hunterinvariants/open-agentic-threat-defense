@@ -55,33 +55,52 @@ relevant components are:
 
 ## 5. Threats and mitigations (STRIDE-oriented)
 
-- **Spoofing:** session cookies are HMAC-signed; tokens compared in constant
-  time; SSO ID tokens verified (JWKS RS256, iss/aud/exp/nonce); SAML assertions
-  verified via goxmldsig; audit `source_ip` from `X-Forwarded-For` only behind a
-  configured trusted proxy.
+- **Spoofing:** session cookies are HMAC-signed and carry a `jti` that logout
+  revokes server-side (plus an absolute max-age); tokens compared in constant
+  time; SSO ID tokens verified (JWKS RS256, iss/aud/exp/nonce, `azp` for
+  multi-audience, HTTPS-only issuer/endpoints); SAML assertions verified via
+  patched goxmldsig; IdP-asserted roles filtered to the known role set; audit
+  `source_ip` from `X-Forwarded-For` only behind a configured trusted proxy.
 - **Tampering:** audit chain is `H(prev || record)` SHA-256, HMAC-anchored with a
-  server-held key; `valid:false` + `unlinked` surfaced when records sit outside
-  the chain. (Residual: see §6.)
+  server-held (domain-separated) key; in the Postgres path validity is
+  **re-derived from the event rows at runtime** so non-head DB tampering is
+  detected live; `valid:false` + `unlinked` surfaced when records sit outside the
+  chain. (Residual: see §6.)
 - **Repudiation:** every gateway decision, approval, login, and ingest is an
   audit record with actor, roles, source, and outcome.
 - **Information disclosure:** RBAC on all endpoints; tenant-scoped store access;
   `LastPersistenceError` redacted; secrets read from env, never logged, never on
   the process command line.
 - **Denial of service:** HTTP server timeouts (Slowloris); per-IP login
-  rate-limit (Postgres-backed across HA); gateway in-flight limiter (advisory-
-  lock semaphore across HA); ingest body capped at 1 MB; retention prune.
+  rate-limit (Postgres-backed across HA); gateway in-flight limiter (per-instance
+  in-process semaphore that sheds `429` without pinning a DB connection — no
+  pool-exhaustion deadlock); mutating request bodies capped at 4 MiB; the
+  correlator scans only the most recent events per ingest; retention prune runs
+  only when records age out.
 - **Elevation of privilege:** secure-by-default (refuses non-loopback bind
-  without auth); RBAC roles; approval-gated high-impact actions; tenant from the
-  verified principal only; IdP-asserted tenant checked against an allowlist.
+  without auth); RBAC roles (central `RequiredRoles` table authoritative);
+  approval-gated high-impact actions; tenant from the verified principal only;
+  IdP-asserted tenant checked against an allowlist and IdP roles against the known
+  role set; tenant administration scoped to platform admins or the caller's own
+  tenant (no global wildcard).
 - **SSRF:** gateway-proxy upstream validated (scheme, host/IP blocklist for
-  loopback/link-local/private/metadata) and **IP-pinned** at dial time to defeat
-  DNS rebinding; forwarded headers allowlisted; upstream response size-capped.
+  loopback/link-local/private/metadata/RFC6598/reserved) and **IP-pinned** at dial
+  time to defeat DNS rebinding; local/internal upstreams are an explicit operator
+  opt-in (never inferred from the peer address); proxy endpoints refused in open
+  mode; forwarded headers allowlisted; URL userinfo stripped from logs; upstream
+  response size-capped.
 
 ## 6. Known limitations / residual risk
 
-- **Audit chain is tamper-*evident*, not tamper-*proof*.** The HMAC key lives on
-  the host; an attacker with both DB write and host env access can rewrite the
-  chain. True non-repudiation needs an external append-only anchor.
+- **Audit chain is tamper-*evident*, not tamper-*proof*.** Runtime re-derivation
+  detects record tampering, but the HMAC key lives on the host; an attacker with
+  both DB write and host env access can still rewrite the chain consistently. True
+  non-repudiation needs an external append-only anchor. The anchor binds the
+  head/index/validity and the audit-event hash does not yet cover the `tenant`
+  field — both warrant a future chain-format version bump.
+- **Session revocation is per-instance.** Logout revokes server-side via an
+  in-memory `jti` denylist; in HA this is local to the serving instance, though
+  the absolute max-age still bounds every session globally.
 - **Detection is heuristic.** The policy/risk engine uses obfuscation-resistant
   term/taint co-occurrence + risk scoring + history, not data-flow analysis or
   ML. It can produce false positives and is evadable by a determined adversary.
@@ -93,6 +112,9 @@ relevant components are:
 
 ## 7. Out of scope
 
-Host/OS compromise with root, supply-chain compromise of dependencies (mitigated
-separately via SHA-pinned actions, CodeQL, Dependabot, dependency-review), and
-physical access are out of scope for this model.
+Host/OS compromise with root and physical access are out of scope. Supply-chain
+compromise of dependencies is mitigated separately (SHA-pinned actions, CodeQL,
+Dependabot, dependency-review, fuzzed parsers, patched crypto/XML deps) and its
+blast radius is reduced: the self-hosted CI runner runs as a non-root user and
+may `sudo` only a fixed deploy wrapper, so build-time code execution is confined
+to the unprivileged runner account rather than root.

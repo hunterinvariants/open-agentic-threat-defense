@@ -14,6 +14,18 @@ The commercial license path is for organizations that need to avoid AGPL
 obligations or want enterprise terms, closed-source embedding, warranty,
 support, or procurement language.
 
+### Edition enforcement (license tokens)
+
+Editions are enforced technically with Ed25519-signed license tokens. The vendor
+generates a key pair and issues a token bound to an organization, edition,
+feature set, and expiry (`oadtdctl license keygen | issue | verify`). A
+deployment is configured with the public key (`--license-public-key`) and the
+token (`--license-file`); the service verifies the signature and expiry on
+startup and reports status at `GET /api/license`. With no token the service runs
+as the community edition. The private key never ships with the product, so a
+token cannot be forged without it. This is the technical edition gate; it is
+independent of the AGPL/commercial legal licensing above.
+
 ## CLA From Day 1
 
 External contributions require a CLA before merge so the project owner can keep
