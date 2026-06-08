@@ -14,8 +14,12 @@ malware behavior, or autonomous propagation. Demo data generates telemetry only.
 - Go HTTP service with Postgres persistence for production and JSON snapshot
   fallback for local development.
 - Policy engine for agent-tool abuse, taint-aware source-to-sink flow,
-  secret exposure, unexpected egress, discovery behavior, deception hits,
-  suspicious model runtime activity, and versioned threat-pack content.
+  secret exposure, unexpected egress, discovery, lateral movement, destructive
+  impact, deception hits, suspicious model runtime activity, and versioned
+  threat-pack content.
+- Tool-provenance verification: when a signed tool fingerprint is declared for a
+  tool, the gateway denies a provenance mismatch (spoofed/tampered tool) and
+  gates a missing fingerprint — supply-chain control for agent tools.
 - Inline tool-call PEP for enforce-before-execute decisions at the tool
   boundary, backed by a separate PDP endpoint for diagnostics.
 - Gateway queue, approval polling, a transport proxy for tool backends, and an

@@ -16,6 +16,7 @@ import (
 type Engine struct {
 	cfgMu               sync.RWMutex
 	approvedTools       map[string]struct{}
+	toolProvenance      map[string]ToolProvenanceEntry
 	approvedEgressHosts map[string]struct{}
 	pack                ThreatPack
 	deceptionMu         sync.RWMutex
@@ -32,6 +33,18 @@ type Config struct {
 	ApprovedEgressHosts []string
 	ThreatPack          ThreatPack
 	DeceptionTokens     []domain.DeceptionToken
+	ToolProvenance      []ToolProvenanceEntry
+}
+
+// ToolProvenanceEntry declares the expected provenance of an agent tool: the
+// publisher and a fingerprint (e.g. a sha256 of the tool's signed manifest or
+// schema). When configured, the gateway verifies that a tool call carries a
+// matching fingerprint, so a spoofed or tampered tool is caught even if its name
+// is on the approved list. Entries are optional and opt-in per tool.
+type ToolProvenanceEntry struct {
+	Tool        string `json:"tool"`
+	Publisher   string `json:"publisher,omitempty"`
+	Fingerprint string `json:"fingerprint"`
 }
 
 func DefaultConfig() Config {
@@ -63,6 +76,18 @@ func New(config Config) *Engine {
 			approvedEgressHosts[host] = struct{}{}
 		}
 	}
+	toolProvenance := make(map[string]ToolProvenanceEntry, len(config.ToolProvenance))
+	for _, entry := range config.ToolProvenance {
+		name := strings.ToLower(strings.TrimSpace(entry.Tool))
+		if name == "" || strings.TrimSpace(entry.Fingerprint) == "" {
+			continue
+		}
+		toolProvenance[name] = ToolProvenanceEntry{
+			Tool:        name,
+			Publisher:   strings.TrimSpace(entry.Publisher),
+			Fingerprint: strings.TrimSpace(entry.Fingerprint),
+		}
+	}
 	pack := config.ThreatPack
 	if err := pack.Validate(); err != nil {
 		pack = DefaultThreatPack()
@@ -87,6 +112,7 @@ func New(config Config) *Engine {
 
 	engine := &Engine{
 		approvedTools:       approvedTools,
+		toolProvenance:      toolProvenance,
 		approvedEgressHosts: approvedEgressHosts,
 		pack:                pack,
 		deception:           make(map[string]domain.DeceptionToken),
@@ -124,12 +150,45 @@ func (e *Engine) isToolApproved(tool string) bool {
 	return ok
 }
 
+type provenanceStatus int
+
+const (
+	provenanceNotRequired provenanceStatus = iota // no provenance entry for this tool
+	provenanceVerified                            // entry exists and the claim matches
+	provenanceMissing                             // entry exists but the call carries no fingerprint
+	provenanceMismatch                            // entry exists and the claim does not match
+)
+
+// checkToolProvenance verifies a tool call against the configured provenance for
+// that tool. It is opt-in: tools without an entry return provenanceNotRequired,
+// so existing behaviour is unchanged unless an operator declares provenance.
+func (e *Engine) checkToolProvenance(tool string, request domain.ToolCallRequest) provenanceStatus {
+	e.cfgMu.RLock()
+	entry, ok := e.toolProvenance[tool]
+	e.cfgMu.RUnlock()
+	if !ok {
+		return provenanceNotRequired
+	}
+	claimed := strings.TrimSpace(request.ToolFingerprint)
+	if claimed == "" {
+		return provenanceMissing
+	}
+	if !strings.EqualFold(claimed, entry.Fingerprint) {
+		return provenanceMismatch
+	}
+	if entry.Publisher != "" && !strings.EqualFold(strings.TrimSpace(request.ToolPublisher), entry.Publisher) {
+		return provenanceMismatch
+	}
+	return provenanceVerified
+}
+
 // Reload atomically swaps the detection configuration (approved tools, egress
 // hosts, and threat pack) without a restart. Gateway call history is preserved.
 func (e *Engine) Reload(config Config) {
 	rebuilt := New(config)
 	e.cfgMu.Lock()
 	e.approvedTools = rebuilt.approvedTools
+	e.toolProvenance = rebuilt.toolProvenance
 	e.approvedEgressHosts = rebuilt.approvedEgressHosts
 	e.pack = rebuilt.pack
 	e.cfgMu.Unlock()

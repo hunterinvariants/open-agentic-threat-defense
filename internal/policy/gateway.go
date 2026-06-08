@@ -144,6 +144,7 @@ func (e *Engine) assessGatewayRequest(request domain.ToolCallRequest, tool strin
 	verdict := domain.GatewayAllow
 	reason := fmt.Sprintf("tool %q matched the approved manifest", tool)
 	risk := severityForAlerts(alerts)
+	provenance := e.checkToolProvenance(tool, request)
 
 	switch {
 	case strings.TrimSpace(request.ToolName) == "":
@@ -158,6 +159,11 @@ func (e *Engine) assessGatewayRequest(request domain.ToolCallRequest, tool strin
 		verdict = domain.GatewayDeny
 		reason = fmt.Sprintf("tool %q is not on the approved manifest", tool)
 		risk = maxSeverity(risk, domain.SeverityHigh)
+	case provenance == provenanceMismatch:
+		verdict = domain.GatewayDeny
+		reason = fmt.Sprintf("tool %q provenance mismatch — possible tool spoofing or tampering", tool)
+		risk = maxSeverity(risk, domain.SeverityCritical)
+		findings = append(findings, "provenance=mismatch")
 	default:
 		if len(taint.Flows) > 0 {
 			findings = append(findings, taint.Flows...)
@@ -249,6 +255,11 @@ func (e *Engine) assessGatewayRequest(request domain.ToolCallRequest, tool strin
 			verdict = domain.GatewayRequireApproval
 			reason = "tool call produced security alerts and requires review"
 			risk = maxSeverity(risk, severityForAlerts(alerts))
+		} else if provenance == provenanceMissing {
+			verdict = domain.GatewayRequireApproval
+			reason = fmt.Sprintf("tool %q is missing required provenance and needs operator approval", tool)
+			risk = maxSeverity(risk, domain.SeverityHigh)
+			findings = append(findings, "provenance=missing")
 		}
 	}
 

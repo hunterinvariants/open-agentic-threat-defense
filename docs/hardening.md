@@ -98,6 +98,15 @@ operator checklist for a hardened deployment. It complements
   `.sig` no longer silently skips verification), and an unsigned load with no key
   is warned.
 
+### Agent tool provenance
+- Tools can declare expected provenance in `policy.json` (`tool_provenance`:
+  publisher + fingerprint). At gate time the inline gateway verifies the
+  fingerprint a tool call carries: a **mismatch is denied** (spoofed or tampered
+  tool, even if the tool name is approved), a **missing fingerprint requires
+  approval**, and a verified fingerprint passes. The check is opt-in per tool, so
+  tools without an entry are unaffected. This is a supply-chain control for the
+  agent's tool surface, complementing the approved-tool allowlist.
+
 ### Supply chain / CI
 - All third-party GitHub Actions pinned to commit SHAs (including `setup-go`);
   CodeQL, Dependabot (gomod + actions), and dependency-review enabled.

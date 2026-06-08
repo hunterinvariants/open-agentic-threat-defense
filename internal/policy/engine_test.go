@@ -280,3 +280,47 @@ func TestGateToolCallRequiresApprovalForImpact(t *testing.T) {
 		t.Fatalf("expected require_approval for impact action, got %s", decision.Verdict)
 	}
 }
+
+func TestGateToolCallVerifiesToolProvenance(t *testing.T) {
+	engine := New(Config{
+		ApprovedTools:  []string{"signed_tool"},
+		ToolProvenance: []ToolProvenanceEntry{{Tool: "signed_tool", Publisher: "oadtd", Fingerprint: "sha256:good"}},
+	})
+
+	verified := engine.GateToolCall(domain.ToolCallRequest{
+		ID: "p1", AssetID: "h", Actor: "a", ToolName: "signed_tool",
+		Command: "list", ToolFingerprint: "sha256:good", ToolPublisher: "oadtd",
+	})
+	if verified.Verdict != domain.GatewayAllow {
+		t.Fatalf("verified provenance should allow, got %s (%s)", verified.Verdict, verified.Reason)
+	}
+
+	mismatch := engine.GateToolCall(domain.ToolCallRequest{
+		ID: "p2", AssetID: "h", Actor: "a", ToolName: "signed_tool",
+		Command: "list", ToolFingerprint: "sha256:WRONG", ToolPublisher: "oadtd",
+	})
+	if mismatch.Verdict != domain.GatewayDeny {
+		t.Fatalf("provenance mismatch should deny, got %s (%s)", mismatch.Verdict, mismatch.Reason)
+	}
+
+	missing := engine.GateToolCall(domain.ToolCallRequest{
+		ID: "p3", AssetID: "h", Actor: "a", ToolName: "signed_tool", Command: "list",
+	})
+	if missing.Verdict != domain.GatewayRequireApproval {
+		t.Fatalf("missing provenance should require approval, got %s (%s)", missing.Verdict, missing.Reason)
+	}
+}
+
+func TestGateToolCallProvenanceNotRequiredForUnlistedTool(t *testing.T) {
+	engine := New(Config{
+		ApprovedTools:  []string{"asset_inventory", "signed_tool"},
+		ToolProvenance: []ToolProvenanceEntry{{Tool: "signed_tool", Fingerprint: "sha256:good"}},
+	})
+
+	decision := engine.GateToolCall(domain.ToolCallRequest{
+		ID: "p4", AssetID: "h", Actor: "a", ToolName: "asset_inventory", Command: "list assets",
+	})
+	if decision.Verdict != domain.GatewayAllow {
+		t.Fatalf("tool without a provenance entry should be unaffected, got %s (%s)", decision.Verdict, decision.Reason)
+	}
+}

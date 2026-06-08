@@ -68,19 +68,21 @@ type DeceptionToken struct {
 }
 
 type ToolCallRequest struct {
-	ID          string            `json:"id"`
-	Timestamp   time.Time         `json:"timestamp"`
-	Tenant      string            `json:"tenant,omitempty"`
-	AssetID     string            `json:"asset_id"`
-	Hostname    string            `json:"hostname"`
-	Actor       string            `json:"actor"`
-	ToolName    string            `json:"tool_name"`
-	Command     string            `json:"command,omitempty"`
-	Arguments   string            `json:"arguments,omitempty"`
-	Signal      string            `json:"signal,omitempty"`
-	Destination string            `json:"destination,omitempty"`
-	Labels      []string          `json:"labels,omitempty"`
-	Metadata    map[string]string `json:"metadata,omitempty"`
+	ID              string            `json:"id"`
+	Timestamp       time.Time         `json:"timestamp"`
+	Tenant          string            `json:"tenant,omitempty"`
+	AssetID         string            `json:"asset_id"`
+	Hostname        string            `json:"hostname"`
+	Actor           string            `json:"actor"`
+	ToolName        string            `json:"tool_name"`
+	ToolFingerprint string            `json:"tool_fingerprint,omitempty"`
+	ToolPublisher   string            `json:"tool_publisher,omitempty"`
+	Command         string            `json:"command,omitempty"`
+	Arguments       string            `json:"arguments,omitempty"`
+	Signal          string            `json:"signal,omitempty"`
+	Destination     string            `json:"destination,omitempty"`
+	Labels          []string          `json:"labels,omitempty"`
+	Metadata        map[string]string `json:"metadata,omitempty"`
 }
 
 type GatewayVerdict string

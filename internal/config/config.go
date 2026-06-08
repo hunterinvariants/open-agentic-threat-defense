@@ -13,11 +13,12 @@ import (
 const DefaultCorrelationWindow = 30 * time.Minute
 
 type Config struct {
-	ApprovedTools       []string          `json:"approved_tools"`
-	ApprovedEgressHosts []string          `json:"approved_egress_hosts"`
-	CorrelationWindow   string            `json:"correlation_window"`
-	ThreatPackPath      string            `json:"threat_pack_path"`
-	Users               []auth.UserConfig `json:"users"`
+	ApprovedTools       []string                     `json:"approved_tools"`
+	ApprovedEgressHosts []string                     `json:"approved_egress_hosts"`
+	CorrelationWindow   string                       `json:"correlation_window"`
+	ThreatPackPath      string                       `json:"threat_pack_path"`
+	Users               []auth.UserConfig            `json:"users"`
+	ToolProvenance      []policy.ToolProvenanceEntry `json:"tool_provenance,omitempty"`
 }
 
 func Load(path string) (Config, error) {
@@ -50,7 +51,8 @@ func (c Config) PolicyConfig() (policy.Config, error) {
 		pack.ApprovedEgressHosts = append([]string(nil), c.ApprovedEgressHosts...)
 	}
 	return policy.Config{
-		ThreatPack: pack,
+		ThreatPack:     pack,
+		ToolProvenance: append([]policy.ToolProvenanceEntry(nil), c.ToolProvenance...),
 	}, nil
 }
 
