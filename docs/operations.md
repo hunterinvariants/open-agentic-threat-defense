@@ -320,9 +320,9 @@ For ongoing assurance, validate on a schedule. Two options:
 - **systemd timer (recommended):** install the packaged
   `oadtd-validate.service` (oneshot) and `oadtd-validate.timer`. The service
   reads a least-privilege token via `--token-file /etc/oadtd/validation.token`
-  (make it readable by the `oadtd` user: `chown oadtd:oadtd`, `chmod 600`). A
-  detection regression makes the unit fail; attach an `OnFailure=` drop-in to
-  alert. Enable with `systemctl enable --now oadtd-validate.timer`.
+  (make it readable by the `oadtd` user: `chown oadtd:oadtd`, `chmod 600`) and
+  writes the latest result with `--output /var/lib/oadtd/validation-last.json`.
+  Enable with `systemctl enable --now oadtd-validate.timer`.
 - **Long-lived monitor:** `oadtdctl validate --continuous --interval 1h
   --webhook https://hooks.example/regress` re-runs the suite on an interval and
   POSTs a JSON alert (`type: detection_regression`) to the webhook whenever a
@@ -332,6 +332,47 @@ Create the least-privilege validation identity by adding an `ingestor` user to
 `policy.json` (`oadtdctl token-hash` produces the `token_sha256`), then restart
 the server so the new user loads. Store the raw token only in the root-readable
 `--token-file`.
+
+### Alerting on regression
+
+`oadtd-validate.service` ships with `OnFailure=oadtd-validate-alert.service`. When
+a run regresses (or fails to complete), the alert unit runs
+`/usr/local/sbin/oadtd-validate-alert`, which reads the result file and POSTs a
+single webhook alert — rich (with the failed techniques) when a result is
+available, generic otherwise. Install the script and configure the destination:
+
+```bash
+# install the alert helper + units (raw files from the repo)
+base=https://raw.githubusercontent.com/hunterinvariants/open-agentic-threat-defense/main
+curl -fsSL "$base/scripts/oadtd-validate-alert.sh" -o /usr/local/sbin/oadtd-validate-alert
+chmod 0755 /usr/local/sbin/oadtd-validate-alert
+for u in oadtd-validate.service oadtd-validate.timer oadtd-validate-alert.service; do
+  curl -fsSL "$base/packaging/systemd/$u" -o "/etc/systemd/system/$u"
+done
+
+# configure the webhook (root-only)
+umask 077
+cat >/etc/oadtd/validate.env <<'ENV'
+OATD_VALIDATE_ALERT_URL=https://hooks.example/detection-regression
+OATD_VALIDATE_ALERT_TOKEN=optional-bearer-token
+ENV
+
+systemctl daemon-reload && systemctl enable --now oadtd-validate.timer
+```
+
+### Coverage in the dashboard
+
+Point the server at the same result file and the dashboard shows a live
+**Detection Coverage** panel (`GET /api/gateway/validation`, read-only, viewer
+role). Set `OATD_VALIDATION_RESULT_PATH` in `/etc/oadtd/oadtd.env` and restart:
+
+```bash
+echo 'OATD_VALIDATION_RESULT_PATH=/var/lib/oadtd/validation-last.json' >> /etc/oadtd/oadtd.env
+systemctl restart oadtd
+```
+
+The panel reads the file the validation timer writes — no re-running of the
+suite on page load, so it never touches the live gateway from the browser.
 
 ## Audit Log
 

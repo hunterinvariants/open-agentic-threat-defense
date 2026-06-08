@@ -46,8 +46,9 @@ malware behavior, or autonomous propagation. Demo data generates telemetry only.
 - `oadtdctl agent` for long-running tail-based collection from supported
   defensive telemetry sources, including native Windows Event Log and Linux
   journald modes.
-- Browser dashboard with asset risk graph, alerts, events, rules, and response
-  actions, plus session-based dashboard login.
+- Browser dashboard with asset risk graph, alerts, events, rules, response
+  actions, and a live ATT&CK detection-coverage panel, plus session-based
+  dashboard login.
 - Alert webhook export for SIEM-style integrations.
 - systemd and Windows service starter packaging.
 - AGPLv3-or-later community license, commercial dual-license path, and CLA from
@@ -492,8 +493,10 @@ Use it after upgrades or policy changes as a detection regression check; a
 non-zero exit means an expected verdict did not hold. Add `--json` for CI,
 `--coverage` for an ATT&CK tactic/technique coverage map, or `--continuous
 --interval 1h --webhook <url>` to run it as a long-lived monitor that alerts on
-regression. Schedule it with the packaged `oadtd-validate.timer` (see
-[docs/operations.md](docs/operations.md)).
+regression. Schedule it with the packaged `oadtd-validate.timer` (with an
+`OnFailure=` webhook alert), and surface the latest result as a **Detection
+Coverage** panel in the dashboard via `--output` + `OATD_VALIDATION_RESULT_PATH`
+(see [docs/operations.md](docs/operations.md)).
 
 Normalize external defensive logs to OATD JSONL:
 

@@ -41,7 +41,9 @@
   alertsList: document.querySelector("#alerts-list"),
   eventsList: document.querySelector("#events-list"),
   actionsList: document.querySelector("#actions-list"),
-  rulesList: document.querySelector("#rules-list")
+  rulesList: document.querySelector("#rules-list"),
+  coverageBody: document.querySelector("#coverage-body"),
+  coverageMeta: document.querySelector("#coverage-meta")
 };
 
 const emptyTemplate = document.querySelector("#empty-template");
@@ -162,14 +164,15 @@ async function refresh() {
     return;
   }
 
-  const [status, alerts, assets, events, actions, rules, tenants] = await Promise.all([
+  const [status, alerts, assets, events, actions, rules, tenants, coverage] = await Promise.all([
     api("/api/status"),
     api("/api/alerts"),
     api("/api/assets"),
     api("/api/events"),
     api("/api/responses"),
     api("/api/policies"),
-    api("/api/tenants").catch(() => [])
+    api("/api/tenants").catch(() => []),
+    api("/api/gateway/validation").catch(() => null)
   ]);
 
   renderStatus(status);
@@ -180,6 +183,7 @@ async function refresh() {
   renderActions(actions);
   renderRules(rules);
   renderTenants(tenants);
+  renderCoverage(coverage);
 }
 
 function renderStatus(status) {
@@ -308,6 +312,49 @@ function renderRules(rules) {
       <p class="item-body">${escapeHtml(rule.description)}</p>
     `;
     els.rulesList.append(node);
+  });
+}
+
+function renderCoverage(coverage) {
+  els.coverageBody.innerHTML = "";
+  const result = coverage && coverage.result;
+  const rows = result && Array.isArray(result.results) ? result.results.slice() : [];
+  if (!rows.length) {
+    if (els.coverageMeta) {
+      els.coverageMeta.textContent = "ATT&CK - no data";
+    }
+    els.coverageBody.append(emptyNode());
+    return;
+  }
+
+  rows.sort((a, b) => {
+    const ta = a.tactic || "";
+    const tb = b.tactic || "";
+    if (ta === tb) {
+      return (a.technique || "").localeCompare(b.technique || "");
+    }
+    return ta.localeCompare(tb);
+  });
+
+  const held = rows.filter((row) => row.pass).length;
+  if (els.coverageMeta) {
+    const when = coverage.ran_at ? new Date(coverage.ran_at).toLocaleString() : "";
+    els.coverageMeta.textContent = `${held}/${rows.length} held${when ? " - " + when : ""}`;
+  }
+
+  rows.forEach((row) => {
+    const node = document.createElement("article");
+    node.className = "rule-item";
+    const badgeClass = row.pass ? "severity-low" : "severity-high";
+    const badgeLabel = row.pass ? "HELD" : "GAP";
+    node.innerHTML = `
+      <div class="item-top">
+        <div class="item-title">${escapeHtml(row.technique || "-")} - ${escapeHtml(row.name || "")}</div>
+        <span class="badge ${badgeClass}">${badgeLabel}</span>
+      </div>
+      <div class="item-meta">${escapeHtml(row.tactic || "-")} - want ${escapeHtml(row.want || "")} - got ${escapeHtml(row.got || "")}</div>
+    `;
+    els.coverageBody.append(node);
   });
 }
 

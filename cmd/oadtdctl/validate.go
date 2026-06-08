@@ -42,6 +42,7 @@ func validateCommand(args []string) error {
 	interval := fs.Duration("interval", time.Hour, "interval between runs in --continuous mode")
 	webhook := fs.String("webhook", os.Getenv("OATD_VALIDATE_WEBHOOK"), "webhook URL alerted on regression in --continuous mode")
 	webhookToken := fs.String("webhook-token", os.Getenv("OATD_VALIDATE_WEBHOOK_TOKEN"), "bearer token for the regression webhook")
+	output := fs.String("output", os.Getenv("OATD_VALIDATE_OUTPUT"), "write the JSON result to this file after each run")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -58,12 +59,17 @@ func validateCommand(args []string) error {
 	client := &http.Client{Timeout: 15 * time.Second}
 
 	if *continuous {
-		return runContinuousValidation(client, *baseURL, tok, *asset, *interval, *webhook, *webhookToken)
+		return runContinuousValidation(client, *baseURL, tok, *asset, *interval, *webhook, *webhookToken, *output)
 	}
 
 	result, err := runValidation(client, *baseURL, tok, *asset)
 	if err != nil {
 		return err
+	}
+	if *output != "" {
+		if err := writeResultFile(*output, result); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not write %s: %v\n", *output, err)
+		}
 	}
 	switch {
 	case *coverage && *jsonOut:
@@ -293,7 +299,7 @@ func printCoverageJSON(res validationResult) {
 // runContinuousValidation re-runs the suite every interval and alerts on
 // regression. It is designed to run as a long-lived service; for systemd-timer
 // deployments use the one-shot mode instead (its non-zero exit gates OnFailure).
-func runContinuousValidation(client *http.Client, baseURL, token, baseAsset string, interval time.Duration, webhook, webhookToken string) error {
+func runContinuousValidation(client *http.Client, baseURL, token, baseAsset string, interval time.Duration, webhook, webhookToken, output string) error {
 	if interval <= 0 {
 		interval = time.Hour
 	}
@@ -307,6 +313,11 @@ func runContinuousValidation(client *http.Client, baseURL, token, baseAsset stri
 		if err != nil {
 			fmt.Printf("[%s] ERROR %v\n", ts, err)
 			return
+		}
+		if output != "" {
+			if err := writeResultFile(output, res); err != nil {
+				fmt.Printf("[%s] warning: could not write %s: %v\n", ts, output, err)
+			}
 		}
 		if res.Passed == res.Total {
 			fmt.Printf("[%s] OK    %d/%d held\n", ts, res.Passed, res.Total)
@@ -380,6 +391,22 @@ func postRegressionAlert(client *http.Client, webhook, token string, res validat
 		return fmt.Errorf("webhook returned %s", resp.Status)
 	}
 	return nil
+}
+
+// writeResultFile atomically writes the JSON result so consumers (the dashboard
+// endpoint, the OnFailure alert handler) never observe a half-written file. Mode
+// 0640 lets the oadtd service group read it while keeping it off world-read.
+func writeResultFile(path string, res validationResult) error {
+	data, err := json.MarshalIndent(res, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o640); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 func verdictRank(v domain.GatewayVerdict) int {

@@ -1,6 +1,9 @@
 package main
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/open-agentic-threat-defense/oadtd/internal/domain"
@@ -45,5 +48,31 @@ func TestValidationCasesWellFormed(t *testing.T) {
 	}
 	if !sawBenign {
 		t.Fatal("the suite must include a benign baseline to catch false positives")
+	}
+}
+
+func TestWriteResultFileRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "out.json")
+	res := validationResult{
+		Total: 2, Passed: 1, Missed: 1,
+		Rows: []resultRow{{Name: "x", Technique: "T1", Tactic: "Execution", Want: "allow", Got: "deny", Pass: false}},
+	}
+	if err := writeResultFile(path, res); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got validationResult
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("output is not valid JSON: %v", err)
+	}
+	if got.Total != 2 || got.Passed != 1 || len(got.Rows) != 1 {
+		t.Fatalf("round-trip mismatch: %+v", got)
+	}
+	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
+		t.Fatal("temp file should have been renamed away")
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -36,38 +37,39 @@ import (
 const Version = "0.2.0"
 
 type App struct {
-	store            *store.Store
-	policy           *policy.Engine
-	correlator       *correlator.Correlator
-	responder        *response.Planner
-	webDir           string
-	policyPath       string
-	threatPackPath   string
-	auth             *auth.Authenticator
-	trustedProxies   []*net.IPNet
-	gatewayLimiter   chan struct{}
-	gatewayMu        sync.Mutex
-	gatewaySamples   []time.Duration
-	gatewayRejected  int
-	webhook          exporter.Webhook
-	ticketWebhook    exporter.Webhook
-	responseWebhook  exporter.Webhook
-	github           exporter.GitHub
-	jira             exporter.Jira
-	servicenow       exporter.ServiceNow
+	store                  *store.Store
+	policy                 *policy.Engine
+	correlator             *correlator.Correlator
+	responder              *response.Planner
+	webDir                 string
+	policyPath             string
+	validationResultPath   string
+	threatPackPath         string
+	auth                   *auth.Authenticator
+	trustedProxies         []*net.IPNet
+	gatewayLimiter         chan struct{}
+	gatewayMu              sync.Mutex
+	gatewaySamples         []time.Duration
+	gatewayRejected        int
+	webhook                exporter.Webhook
+	ticketWebhook          exporter.Webhook
+	responseWebhook        exporter.Webhook
+	github                 exporter.GitHub
+	jira                   exporter.Jira
+	servicenow             exporter.ServiceNow
 	mcpUpstreamURL         string
 	mcpUpstreamToken       string
 	proxyAllowLocalTargets bool
-	oidc             *oidcProvider
-	saml             *samlProvider
-	instanceName     string
-	publicURL        string
-	tenantRegistry   *tenantRegistry
-	exportMu         sync.RWMutex
-	exportErr        string
-	startedAt        time.Time
-	counter          atomic.Uint64
-	licenseStatus    license.Status
+	oidc                   *oidcProvider
+	saml                   *samlProvider
+	instanceName           string
+	publicURL              string
+	tenantRegistry         *tenantRegistry
+	exportMu               sync.RWMutex
+	exportErr              string
+	startedAt              time.Time
+	counter                atomic.Uint64
+	licenseStatus          license.Status
 }
 
 type Options struct {
@@ -80,6 +82,7 @@ type Options struct {
 	CorrelationWindow         time.Duration
 	ThreatPackPath            string
 	PolicyPath                string
+	ValidationResultPath      string
 	DeceptionTokens           []domain.DeceptionToken
 	TenantPolicies            []policy.TenantPolicy
 	LicenseToken              string
@@ -218,20 +221,21 @@ func NewWithOptions(options Options) (*App, error) {
 		policyEngine.SetTenantPolicy(tenantPolicy)
 	}
 	return &App{
-		store:          st,
-		policy:         policyEngine,
-		correlator:     correlator.New(options.CorrelationWindow),
-		responder:      response.NewDryRun(),
-		webDir:         options.WebDir,
-		policyPath:     strings.TrimSpace(options.PolicyPath),
-		threatPackPath: strings.TrimSpace(options.ThreatPackPath),
-		auth:           authenticator,
-		trustedProxies: trustedProxies,
-		saml:           samlProvider,
-		instanceName:   defaultString(strings.TrimSpace(options.InstanceName), "primary"),
-		publicURL:      strings.TrimSpace(options.PublicURL),
-		tenantRegistry: tenantRegistry,
-		gatewayLimiter: make(chan struct{}, gatewayLimit),
+		store:                st,
+		policy:               policyEngine,
+		correlator:           correlator.New(options.CorrelationWindow),
+		responder:            response.NewDryRun(),
+		webDir:               options.WebDir,
+		policyPath:           strings.TrimSpace(options.PolicyPath),
+		validationResultPath: strings.TrimSpace(options.ValidationResultPath),
+		threatPackPath:       strings.TrimSpace(options.ThreatPackPath),
+		auth:                 authenticator,
+		trustedProxies:       trustedProxies,
+		saml:                 samlProvider,
+		instanceName:         defaultString(strings.TrimSpace(options.InstanceName), "primary"),
+		publicURL:            strings.TrimSpace(options.PublicURL),
+		tenantRegistry:       tenantRegistry,
+		gatewayLimiter:       make(chan struct{}, gatewayLimit),
 		webhook: exporter.Webhook{
 			URL:   options.AlertWebhookURL,
 			Token: options.AlertWebhookToken,
@@ -267,9 +271,9 @@ func NewWithOptions(options Options) (*App, error) {
 		mcpUpstreamURL:         options.MCPUpstreamURL,
 		mcpUpstreamToken:       options.MCPUpstreamToken,
 		proxyAllowLocalTargets: options.ProxyAllowLocalTargets,
-		oidc:             oidcProvider,
-		startedAt:        time.Now().UTC(),
-		licenseStatus:    licenseStatus,
+		oidc:                   oidcProvider,
+		startedAt:              time.Now().UTC(),
+		licenseStatus:          licenseStatus,
 	}, nil
 }
 
@@ -292,6 +296,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("/api/license", a.handleLicense)
 	mux.HandleFunc("/api/gateway/queue", a.handleGatewayQueue)
 	mux.HandleFunc("/api/gateway/actions/", a.handleGatewayAction)
+	mux.HandleFunc("/api/gateway/validation", a.handleValidationResult)
 	mux.HandleFunc("/api/events", a.handleEvents)
 	mux.HandleFunc("/api/alerts", a.handleAlerts)
 	mux.HandleFunc("/api/assets", a.handleAssets)
@@ -322,6 +327,39 @@ func (a *App) LoadDemoForTenant(tenant string) ([]domain.Alert, error) {
 		events[i].ID = ""
 	}
 	return a.ingest(events, tenant)
+}
+
+// handleValidationResult serves the most recent detection-validation result
+// written by `oadtdctl validate --output`, so the dashboard can show live ATT&CK
+// coverage without re-running the suite. Read-only; available to any viewer.
+func (a *App) handleValidationResult(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	if a.validationResultPath == "" {
+		writeError(w, http.StatusNotFound, errors.New("detection validation result not configured"))
+		return
+	}
+	info, err := os.Stat(a.validationResultPath)
+	if err != nil {
+		writeError(w, http.StatusNotFound, errors.New("no detection validation result available yet"))
+		return
+	}
+	data, err := os.ReadFile(a.validationResultPath)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, errors.New("could not read validation result"))
+		return
+	}
+	var result json.RawMessage
+	if err := json.Unmarshal(data, &result); err != nil {
+		writeError(w, http.StatusInternalServerError, errors.New("validation result is not valid JSON"))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ran_at": info.ModTime().UTC(),
+		"result": result,
+	})
 }
 
 func (a *App) handleStatus(w http.ResponseWriter, r *http.Request) {

@@ -2,6 +2,8 @@
 Description=OADTD detection validation (benign ATT&CK emulation suite)
 After=oadtd.service
 Wants=oadtd.service
+# Fire a one-shot alert when a run regresses or fails to complete.
+OnFailure=oadtd-validate-alert.service
 
 [Service]
 Type=oneshot
@@ -11,10 +13,12 @@ WorkingDirectory=/opt/oadtd/current
 # Validates the inline gateway against benign, ATT&CK-mapped emulations using a
 # least-privilege 'ingestor' validation token. The token file must be readable by
 # the oadtd user (chown oadtd:oadtd /etc/oadtd/validation.token; chmod 600).
-# A detection regression makes oadtdctl exit non-zero, which marks this unit
-# failed — pair with an OnFailure= drop-in to alert (or use --continuous --webhook).
-ExecStart=/opt/oadtd/current/oadtdctl validate --url http://127.0.0.1:8080 --token-file /etc/oadtd/validation.token
+# --output writes the latest result for the dashboard endpoint and the alert
+# handler. A detection regression makes oadtdctl exit non-zero, marking this unit
+# failed, which triggers OnFailure=oadtd-validate-alert.service.
+ExecStart=/opt/oadtd/current/oadtdctl validate --url http://127.0.0.1:8080 --token-file /etc/oadtd/validation.token --output /var/lib/oadtd/validation-last.json
 EnvironmentFile=-/etc/oadtd/validate.env
+ReadWritePaths=/var/lib/oadtd
 
 # Sandbox hardening
 NoNewPrivileges=true
