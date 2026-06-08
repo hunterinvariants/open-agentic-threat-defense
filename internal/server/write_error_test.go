@@ -27,3 +27,15 @@ func TestWriteErrorRedactsInternalErrors(t *testing.T) {
 		t.Fatalf("4xx should keep its message, got %s", rec2.Body.String())
 	}
 }
+
+// Log-injection: control characters in user-influenced strings must not be able
+// to forge or split log lines.
+func TestSanitizeLogValue(t *testing.T) {
+	got := sanitizeLogValue("user\ninjected\rline\x00null\ttab")
+	if strings.ContainsAny(got, "\n\r\x00") {
+		t.Fatalf("control characters not stripped: %q", got)
+	}
+	if !strings.Contains(got, "\t") {
+		t.Fatalf("tab should be preserved, got %q", got)
+	}
+}

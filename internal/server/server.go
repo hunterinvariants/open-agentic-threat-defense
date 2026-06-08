@@ -2203,10 +2203,21 @@ func writeError(w http.ResponseWriter, status int, err error) {
 		// Never reflect internal error detail (DB schema/driver diagnostics, SQL
 		// fragments, file paths) to clients. Log it server-side and return a
 		// generic message instead.
-		log.Printf("internal error (500) on request: %v", err)
+		log.Printf("internal error (500) on request: %s", sanitizeLogValue(err.Error()))
 		message = "internal server error"
 	}
 	writeJSON(w, status, map[string]string{"error": message})
+}
+
+// sanitizeLogValue strips newlines and control characters so user-influenced
+// strings embedded in errors cannot forge or split log lines (log injection).
+func sanitizeLogValue(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' || (r < 0x20 && r != '\t') {
+			return ' '
+		}
+		return r
+	}, s)
 }
 
 func methodNotAllowed(w http.ResponseWriter) {
