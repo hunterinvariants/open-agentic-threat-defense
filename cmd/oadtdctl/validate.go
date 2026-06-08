@@ -43,6 +43,7 @@ func validateCommand(args []string) error {
 	webhook := fs.String("webhook", os.Getenv("OATD_VALIDATE_WEBHOOK"), "webhook URL alerted on regression in --continuous mode")
 	webhookToken := fs.String("webhook-token", os.Getenv("OATD_VALIDATE_WEBHOOK_TOKEN"), "bearer token for the regression webhook")
 	output := fs.String("output", os.Getenv("OATD_VALIDATE_OUTPUT"), "write the JSON result to this file after each run")
+	readyWait := fs.Duration("ready-wait", 15*time.Second, "wait up to this long for the server /readyz before validating (0 to disable)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -59,10 +60,10 @@ func validateCommand(args []string) error {
 	client := &http.Client{Timeout: 15 * time.Second}
 
 	if *continuous {
-		return runContinuousValidation(client, *baseURL, tok, *asset, *interval, *webhook, *webhookToken, *output)
+		return runContinuousValidation(client, *baseURL, tok, *asset, *interval, *webhook, *webhookToken, *output, *readyWait)
 	}
 
-	result, err := runValidation(client, *baseURL, tok, *asset)
+	result, err := runValidation(client, *baseURL, tok, *asset, *readyWait)
 	if err != nil {
 		return err
 	}
@@ -193,6 +194,30 @@ func validationCases(asset string) []validationCase {
 	}
 }
 
+// waitForReady polls the server's unauthenticated /readyz until it reports ready
+// or maxWait elapses. This keeps a scheduled run (e.g. a systemd timer firing
+// during a deploy restart) from failing on a transient connection error and
+// raising a false regression alert. It returns regardless once maxWait passes;
+// the suite then surfaces any real connection error itself.
+func waitForReady(client *http.Client, baseURL string, maxWait time.Duration) {
+	url := strings.TrimRight(baseURL, "/") + "/readyz"
+	deadline := time.Now().Add(maxWait)
+	for {
+		resp, err := client.Get(url)
+		if err == nil {
+			ready := resp.StatusCode >= 200 && resp.StatusCode < 300
+			resp.Body.Close()
+			if ready {
+				return
+			}
+		}
+		if !time.Now().Before(deadline) {
+			return
+		}
+		time.Sleep(time.Second)
+	}
+}
+
 // runValidation evaluates the emulation library. Each case is tagged with its
 // own unique run_id (the gateway's primary history key), so the history-aware
 // risk scoring never bleeds between cases or across repeated runs — every
@@ -200,7 +225,10 @@ func validationCases(asset string) []validationCase {
 // deterministic and order-independent, which matters for --continuous mode where
 // accumulated history would otherwise escalate the benign baseline into a
 // spurious "regression".
-func runValidation(client *http.Client, baseURL, token, baseAsset string) (validationResult, error) {
+func runValidation(client *http.Client, baseURL, token, baseAsset string, readyWait time.Duration) (validationResult, error) {
+	if readyWait > 0 {
+		waitForReady(client, baseURL, readyWait)
+	}
 	cases := validationCases(strings.TrimSpace(baseAsset))
 	nonce := time.Now().UnixNano()
 	res := validationResult{Total: len(cases), Rows: make([]resultRow, 0, len(cases))}
@@ -299,7 +327,7 @@ func printCoverageJSON(res validationResult) {
 // runContinuousValidation re-runs the suite every interval and alerts on
 // regression. It is designed to run as a long-lived service; for systemd-timer
 // deployments use the one-shot mode instead (its non-zero exit gates OnFailure).
-func runContinuousValidation(client *http.Client, baseURL, token, baseAsset string, interval time.Duration, webhook, webhookToken, output string) error {
+func runContinuousValidation(client *http.Client, baseURL, token, baseAsset string, interval time.Duration, webhook, webhookToken, output string, readyWait time.Duration) error {
 	if interval <= 0 {
 		interval = time.Hour
 	}
@@ -308,7 +336,7 @@ func runContinuousValidation(client *http.Client, baseURL, token, baseAsset stri
 	fmt.Printf("oadtdctl validate — continuous detection monitor (interval=%s)\n", interval)
 
 	runOnce := func() {
-		res, err := runValidation(client, baseURL, token, baseAsset)
+		res, err := runValidation(client, baseURL, token, baseAsset, readyWait)
 		ts := time.Now().UTC().Format(time.RFC3339)
 		if err != nil {
 			fmt.Printf("[%s] ERROR %v\n", ts, err)

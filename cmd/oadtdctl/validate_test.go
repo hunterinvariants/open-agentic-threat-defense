@@ -2,9 +2,12 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/open-agentic-threat-defense/oadtd/internal/domain"
 )
@@ -48,6 +51,28 @@ func TestValidationCasesWellFormed(t *testing.T) {
 	}
 	if !sawBenign {
 		t.Fatal("the suite must include a benign baseline to catch false positives")
+	}
+}
+
+func TestWaitForReadyReturnsWhenReady(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/readyz" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	done := make(chan struct{})
+	go func() {
+		waitForReady(srv.Client(), srv.URL, 5*time.Second)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("waitForReady did not return promptly when the server is ready")
 	}
 }
 
