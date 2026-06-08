@@ -14,8 +14,37 @@ WorkingDirectory=/opt/oadtd/current
 ExecStart=/opt/oadtd/current/oadtd --addr ${OATD_ADDR} --instance-name %i --public-url ${OATD_PUBLIC_URL} --policy ${OATD_POLICY_PATH}
 Restart=on-failure
 RestartSec=2
+
+# Sandbox hardening (kept consistent with oadtd.service)
 NoNewPrivileges=true
 PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/oadtd
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+RemoveIPC=true
+UMask=0077
+TasksMax=256
+LimitNOFILE=8192
 
 [Install]
 WantedBy=multi-user.target
