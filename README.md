@@ -104,8 +104,18 @@ GitHub security automation includes CodeQL analysis and Dependabot updates for
 Go modules and GitHub Actions, plus dependency-review checks on pull requests.
 
 Tagged releases publish platform binaries, an SPDX SBOM, and a `SHA256SUMS`
-manifest. The release workflow also signs the checksum manifest with Sigstore
-keyless signing.
+manifest (covering the binaries and the SBOM). The release workflow signs the
+checksum manifest with Sigstore keyless signing. Verify a downloaded release
+against the published bundle before trusting it:
+
+```bash
+cosign verify-blob \
+  --bundle SHA256SUMS.bundle \
+  --certificate-identity "https://github.com/hunterinvariants/open-agentic-threat-defense/.github/workflows/release.yml@refs/tags/vX.Y.Z" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  SHA256SUMS
+sha256sum -c SHA256SUMS   # then check the binary against the verified manifest
+```
 
 Postgres operators can create and restore portable JSON backups with
 `oadtdctl backup` and `oadtdctl restore`.

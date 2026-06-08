@@ -9,19 +9,24 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 permissions:
-  id-token: write
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       matrix:
         goos: [linux, windows]
         goarch: [amd64, arm64]
     steps:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
           go-version: "1.25.11"
       - run: go test ./...
@@ -41,6 +46,9 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: write
     steps:
       - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
         with:
@@ -56,7 +64,7 @@ jobs:
         shell: bash
         run: |
           cd dist
-          find . -maxdepth 1 -type f \( -name 'oadtd-*' -o -name 'oadtdctl-*' \) -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+          find . -maxdepth 1 -type f \( -name 'oadtd-*' -o -name 'oadtdctl-*' -o -name 'SBOM.spdx.json' \) -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
       - name: Sign checksum manifest
