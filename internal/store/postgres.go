@@ -468,61 +468,79 @@ func (s *Store) postgresAuditChainSnapshot() AuditChainSnapshot {
 		return AuditChainSnapshot{}
 	}
 
-	snap := AuditChainSnapshot{}
-	var headHash sql.NullString
-	var chainIndex sql.NullInt64
-	var valid sql.NullBool
-	var anchor sql.NullString
-	if err := db.QueryRowContext(ctx, `SELECT head_hash, chain_index, valid, anchor_hmac FROM oatd_audit_chain_state WHERE id = 1`).Scan(&headHash, &chainIndex, &valid, &anchor); err != nil {
+	// The stored head/anchor are the tamper-evident seal. Chain validity is
+	// re-derived from the event rows below (recompute every record hash and walk
+	// the PrevHash links) so DB tampering of a non-head record is detected at
+	// runtime instead of trusting the stored `valid` flag.
+	var storedHead, storedAnchor sql.NullString
+	if err := db.QueryRowContext(ctx, `SELECT head_hash, anchor_hmac FROM oatd_audit_chain_state WHERE id = 1`).Scan(&storedHead, &storedAnchor); err != nil {
 		s.mu.RLock()
 		defer s.mu.RUnlock()
 		return s.auditChainSnapshotLocked()
 	}
-	if headHash.Valid {
-		snap.Head = headHash.String
-	}
-	if chainIndex.Valid {
-		snap.Linked = int(chainIndex.Int64)
-	}
-	if valid.Valid {
-		snap.Valid = valid.Bool
-	}
-	if anchor.Valid {
-		snap.Anchor = anchor.String
-		snap.Anchored = strings.TrimSpace(anchor.String) != ""
-	}
-	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM oatd_audit_events`).Scan(&snap.Total); err != nil {
+
+	rows, err := db.QueryContext(ctx, `SELECT id, occurred_at, data FROM oatd_audit_events ORDER BY (data->>'chain_index')::int ASC NULLS LAST, occurred_at ASC, id ASC`)
+	if err != nil {
 		s.mu.RLock()
 		defer s.mu.RUnlock()
 		return s.auditChainSnapshotLocked()
 	}
+	defer rows.Close()
+
+	snap := AuditChainSnapshot{Valid: true}
+	previous := ""
+	for rows.Next() {
+		var id string
+		var ts time.Time
+		var data []byte
+		if err := rows.Scan(&id, &ts, &data); err != nil {
+			snap.Valid = false
+			break
+		}
+		snap.Total++
+		var event domain.AuditEvent
+		if err := json.Unmarshal(data, &event); err != nil {
+			snap.Valid = false
+			continue
+		}
+		if strings.TrimSpace(event.Hash) == "" {
+			continue
+		}
+		snap.Linked++
+		if event.PrevHash != previous {
+			snap.Valid = false
+		}
+		if event.Hash != auditEventHash(event, event.PrevHash) {
+			snap.Valid = false
+		}
+		previous = event.Hash
+		snap.Head = event.Hash
+		snap.Previous = event.PrevHash
+		snap.LastAuditID = id
+		snap.LastTimestamp = ts
+	}
+	if err := rows.Err(); err != nil {
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+		return s.auditChainSnapshotLocked()
+	}
+
 	if snap.Head == "" {
 		snap.Valid = snap.Total == 0
 		snap.Anchored = false
 		return snap
 	}
-	expectedAnchor := auditChainAnchorValue(snap.Head, snap.Linked, snap.Valid)
-	if expectedAnchor != "" {
-		snap.Anchored = true
-		if snap.Anchor != "" && snap.Anchor != expectedAnchor {
-			snap.Valid = false
-		}
-		snap.Anchor = expectedAnchor
-	}
-	var (
-		id   string
-		ts   time.Time
-		data []byte
-	)
-	if err := db.QueryRowContext(ctx, `SELECT id, occurred_at, data FROM oatd_audit_events WHERE data->>'hash' = $1 LIMIT 1`, snap.Head).Scan(&id, &ts, &data); err != nil {
+
+	// The re-derived head must match the stored head, and the anchor recomputed
+	// over the re-derived (head, linked, valid) must match the stored anchor.
+	if storedHead.Valid && strings.TrimSpace(storedHead.String) != "" && storedHead.String != snap.Head {
 		snap.Valid = false
-		return snap
 	}
-	snap.LastAuditID = id
-	snap.LastTimestamp = ts
-	var event domain.AuditEvent
-	if err := json.Unmarshal(data, &event); err == nil {
-		snap.Previous = event.PrevHash
+	expectedAnchor := auditChainAnchorValue(snap.Head, snap.Linked, snap.Valid)
+	snap.Anchor = expectedAnchor
+	snap.Anchored = expectedAnchor != ""
+	if storedAnchor.Valid && strings.TrimSpace(storedAnchor.String) != "" && expectedAnchor != "" && storedAnchor.String != expectedAnchor {
+		snap.Valid = false
 	}
 	return snap
 }

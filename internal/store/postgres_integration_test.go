@@ -114,6 +114,63 @@ func TestPostgresPersistenceIntegration(t *testing.T) {
 	}
 }
 
+// H3: the Postgres audit-chain snapshot must re-derive validity from the event
+// rows so that tampering with a non-head record is detected at runtime, instead
+// of trusting the stored `valid` flag.
+func TestPostgresAuditChainDetectsRecordTampering(t *testing.T) {
+	dsn := os.Getenv("OATD_TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("set OATD_TEST_POSTGRES_DSN to run Postgres integration tests")
+	}
+	t.Setenv("OATD_AUDIT_HMAC_SECRET", "integration-audit-secret")
+
+	s, err := NewWithPostgres(dsn)
+	if err != nil {
+		t.Fatalf("new postgres store: %v", err)
+	}
+	defer s.Close()
+
+	// Isolate from any other integration data: start from an empty chain.
+	if _, err := s.db.Exec(`DELETE FROM oatd_audit_events`); err != nil {
+		t.Fatalf("clean audit events: %v", err)
+	}
+	if _, err := s.db.Exec(`UPDATE oatd_audit_chain_state SET head_hash = '', chain_index = 0, anchor_hmac = '' WHERE id = 1`); err != nil {
+		t.Fatalf("reset chain state: %v", err)
+	}
+
+	suffix := strings.ReplaceAll(time.Now().UTC().Format("20060102150405.000000000"), ".", "")
+	ids := []string{"tamper-a-" + suffix, "tamper-b-" + suffix, "tamper-c-" + suffix}
+	defer func() {
+		for _, id := range ids {
+			_, _ = s.db.Exec(`DELETE FROM oatd_audit_events WHERE id = $1`, id)
+		}
+	}()
+	for _, id := range ids {
+		if err := s.AddAudit(domain.AuditEvent{
+			ID:        id,
+			Timestamp: time.Now().UTC(),
+			Actor:     "tester",
+			Action:    "test.write",
+			Outcome:   "ok",
+		}); err != nil {
+			t.Fatalf("add audit %s: %v", id, err)
+		}
+	}
+
+	if snap := s.AuditChain(); !snap.Valid || snap.Linked != len(ids) {
+		t.Fatalf("expected a valid %d-record chain before tampering, got %+v", len(ids), snap)
+	}
+
+	// Tamper a NON-head record's content without updating its stored hash.
+	if _, err := s.db.Exec(`UPDATE oatd_audit_events SET data = jsonb_set(data, '{outcome}', '"tampered"') WHERE id = $1`, ids[0]); err != nil {
+		t.Fatalf("tamper: %v", err)
+	}
+
+	if snap := s.AuditChain(); snap.Valid {
+		t.Fatalf("expected the chain to be reported INVALID after DB tampering, got %+v", snap)
+	}
+}
+
 func cleanupPostgresIntegrationRows(t *testing.T, s *Store, ids ...string) {
 	t.Helper()
 	if s == nil || s.db == nil {

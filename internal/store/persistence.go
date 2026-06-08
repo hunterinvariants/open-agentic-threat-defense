@@ -271,6 +271,18 @@ func (s *Store) enforceRetentionLocked() error {
 	cutoff := time.Now().UTC().Add(-s.retentionWindow)
 	retained := s.retainedSnapshotLocked(cutoff)
 
+	// Nothing aged out: skip the O(n) full rewrite (and, in Postgres mode, the
+	// TRUNCATE + bulk re-INSERT of every table) that would otherwise run on every
+	// single write even when no record is past the retention cutoff.
+	if len(retained.Events) == len(s.events) &&
+		len(retained.Alerts) == len(s.alerts) &&
+		len(retained.Actions) == len(s.actions) &&
+		len(retained.Audits) == len(s.audits) &&
+		len(retained.Assets) == len(s.assets) {
+		s.lastErr = ""
+		return nil
+	}
+
 	s.events = append([]domain.Event(nil), retained.Events...)
 	s.alerts = append([]domain.Alert(nil), retained.Alerts...)
 	s.actions = append([]domain.ResponseAction(nil), retained.Actions...)
