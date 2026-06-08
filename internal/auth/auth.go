@@ -2,6 +2,7 @@ package auth
 
 import (
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
@@ -50,12 +51,15 @@ type Authenticator struct {
 	sessionKey []byte
 	loginMu    sync.Mutex
 	logins     map[string]loginAttempt
+	revokedMu  sync.Mutex
+	revoked    map[string]time.Time // session id (jti) -> prune-after time
 }
 
 type sessionPayload struct {
 	Principal Principal `json:"principal"`
 	ExpiresAt time.Time `json:"expires_at"`
 	IssuedAt  time.Time `json:"issued_at"`
+	ID        string    `json:"jti,omitempty"`
 }
 
 type loginAttempt struct {
@@ -68,6 +72,7 @@ func New(users []UserConfig, legacyToken string) *Authenticator {
 	authenticator := &Authenticator{
 		users:      normalizeUsers(users),
 		logins:     make(map[string]loginAttempt),
+		revoked:    make(map[string]time.Time),
 		sessionTTL: 12 * time.Hour,
 	}
 	if legacyToken != "" {
@@ -203,8 +208,58 @@ func (a *Authenticator) Logout(r *http.Request) bool {
 	if sessionToken == "" {
 		return false
 	}
-	_, ok := a.parseSession(sessionToken)
-	return ok
+	payload, ok := a.parseSessionPayload(sessionToken)
+	if !ok {
+		return false
+	}
+	// Revoke the session server-side so the signed cookie cannot be replayed.
+	until := payload.ExpiresAt
+	if until.IsZero() {
+		until = time.Now().UTC().Add(a.sessionTTL)
+	}
+	a.revoke(payload.ID, until)
+	return true
+}
+
+func newSessionID() (string, error) {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(buf), nil
+}
+
+// revoke marks a session id as invalid until the given prune time.
+func (a *Authenticator) revoke(id string, until time.Time) {
+	if id = strings.TrimSpace(id); id == "" {
+		return
+	}
+	a.revokedMu.Lock()
+	defer a.revokedMu.Unlock()
+	if a.revoked == nil {
+		a.revoked = make(map[string]time.Time)
+	}
+	a.pruneRevokedLocked(time.Now().UTC())
+	a.revoked[id] = until
+}
+
+func (a *Authenticator) isRevoked(id string) bool {
+	if id = strings.TrimSpace(id); id == "" {
+		return false
+	}
+	a.revokedMu.Lock()
+	defer a.revokedMu.Unlock()
+	a.pruneRevokedLocked(time.Now().UTC())
+	until, ok := a.revoked[id]
+	return ok && time.Now().UTC().Before(until)
+}
+
+func (a *Authenticator) pruneRevokedLocked(now time.Time) {
+	for id, until := range a.revoked {
+		if !now.Before(until) {
+			delete(a.revoked, id)
+		}
+	}
 }
 
 func (a *Authenticator) SessionKey() []byte {
@@ -433,10 +488,15 @@ func (a *Authenticator) issueSession(info SessionInfo) (string, error) {
 	if len(a.sessionKey) == 0 {
 		return "", errors.New("session key is not configured")
 	}
+	jti, err := newSessionID()
+	if err != nil {
+		return "", err
+	}
 	payload := sessionPayload{
 		Principal: info.Principal,
 		ExpiresAt: info.ExpiresAt.UTC(),
 		IssuedAt:  time.Now().UTC(),
+		ID:        jti,
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -449,19 +509,35 @@ func (a *Authenticator) issueSession(info SessionInfo) (string, error) {
 	return session, nil
 }
 
-func (a *Authenticator) parseSession(token string) (SessionInfo, bool) {
+func (a *Authenticator) parseSessionPayload(token string) (sessionPayload, bool) {
 	if len(a.sessionKey) == 0 {
-		return SessionInfo{}, false
+		return sessionPayload{}, false
 	}
 	data, ok := verifySession(a.sessionKey, token)
 	if !ok {
-		return SessionInfo{}, false
+		return sessionPayload{}, false
 	}
 	var payload sessionPayload
 	if err := json.Unmarshal(data, &payload); err != nil {
-		return SessionInfo{}, false
+		return sessionPayload{}, false
 	}
 	if payload.Principal.Name == "" {
+		return sessionPayload{}, false
+	}
+	// Reject sessions revoked server-side (logout / kill-switch).
+	if a.isRevoked(payload.ID) {
+		return sessionPayload{}, false
+	}
+	// Enforce an absolute max age from issuance, independent of ExpiresAt.
+	if !payload.IssuedAt.IsZero() && time.Now().UTC().Sub(payload.IssuedAt) > a.sessionTTL {
+		return sessionPayload{}, false
+	}
+	return payload, true
+}
+
+func (a *Authenticator) parseSession(token string) (SessionInfo, bool) {
+	payload, ok := a.parseSessionPayload(token)
+	if !ok {
 		return SessionInfo{}, false
 	}
 	return SessionInfo{

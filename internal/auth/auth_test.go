@@ -51,8 +51,9 @@ func TestSessionLoginAndAuthenticate(t *testing.T) {
 	if !a.Logout(req) {
 		t.Fatal("expected logout to validate session")
 	}
-	if _, ok := a.Session(req); !ok {
-		t.Fatal("expected stateless session to remain parseable")
+	// After logout the session is revoked server-side and must no longer parse.
+	if _, ok := a.Session(req); ok {
+		t.Fatal("expected the session to be revoked after logout")
 	}
 }
 

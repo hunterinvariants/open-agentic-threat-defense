@@ -889,8 +889,8 @@ func TestSessionLoginAndLogout(t *testing.T) {
 	statusReq.AddCookie(cookies[0])
 	statusRec = httptest.NewRecorder()
 	app.Routes().ServeHTTP(statusRec, statusReq)
-	if statusRec.Code != http.StatusOK {
-		t.Fatalf("expected stateless session to remain valid until cookie removal, got %d", statusRec.Code)
+	if statusRec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected the session cookie to be revoked after logout, got %d", statusRec.Code)
 	}
 
 	statusReq = httptest.NewRequest(http.MethodGet, "/api/status", nil)
