@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -97,6 +98,9 @@ func newOIDCProvider(issuerURL, clientID, clientSecret, redirectURL string, scop
 	}
 	if len(scopes) == 0 {
 		scopes = []string{"openid", "profile", "email"}
+	}
+	if err := requireSecureOIDCEndpoint("issuer", issuerURL); err != nil {
+		return nil, err
 	}
 	discovery, err := fetchOIDCDiscovery(issuerURL)
 	if err != nil {
@@ -363,7 +367,41 @@ func fetchOIDCDiscovery(issuerURL string) (oidcDiscovery, error) {
 	if discovery.AuthorizationEndpoint == "" || discovery.TokenEndpoint == "" || discovery.JWKSURI == "" {
 		return oidcDiscovery{}, errors.New("oidc discovery missing endpoints")
 	}
+	for _, endpoint := range []struct{ label, raw string }{
+		{"authorization_endpoint", discovery.AuthorizationEndpoint},
+		{"token_endpoint", discovery.TokenEndpoint},
+		{"jwks_uri", discovery.JWKSURI},
+	} {
+		if err := requireSecureOIDCEndpoint(endpoint.label, endpoint.raw); err != nil {
+			return oidcDiscovery{}, err
+		}
+	}
 	return discovery, nil
+}
+
+// requireSecureOIDCEndpoint rejects OIDC issuer/discovery endpoints that are not
+// HTTPS. Plain http is permitted only for loopback hosts (local development), so
+// an on-path attacker cannot serve a forged discovery document or JWKS over http.
+func requireSecureOIDCEndpoint(label, rawURL string) error {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return fmt.Errorf("oidc %s url is invalid: %w", label, err)
+	}
+	switch parsed.Scheme {
+	case "https":
+		return nil
+	case "http":
+		host := parsed.Hostname()
+		if host == "localhost" {
+			return nil
+		}
+		if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+			return nil
+		}
+		return fmt.Errorf("oidc %s url must use https (plain http is only allowed for loopback), got %q", label, rawURL)
+	default:
+		return fmt.Errorf("oidc %s url must use https, got scheme %q", label, parsed.Scheme)
+	}
 }
 
 func defaultOIDCClaim(value string, fallback string) string {
