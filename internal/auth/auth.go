@@ -275,6 +275,13 @@ func RequiredRoles(method string, path string) []string {
 	if strings.HasPrefix(path, "/api/deception") {
 		return []string{RoleOperator}
 	}
+	// Admin-only surfaces must require admin for every method, including GET, so
+	// the central policy is the single source of truth rather than relying solely
+	// on in-handler checks (which a future handler could forget).
+	if path == "/api/tenants" || strings.HasPrefix(path, "/api/tenants/") ||
+		path == "/api/policy/tenants" || path == "/api/policy/reload" {
+		return []string{RoleAdmin}
+	}
 	if method == http.MethodGet || method == http.MethodHead || method == http.MethodOptions {
 		return []string{RoleViewer, RoleAnalyst, RoleOperator, RoleIngestor}
 	}

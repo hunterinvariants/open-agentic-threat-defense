@@ -1109,10 +1109,39 @@ func (a *App) handleAuditChain(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, a.auditChainForTenant(tenantForPrincipal(principalFromRequest(r))))
 }
 
+// isPlatformAdmin returns true for an admin in the default (root) tenant, who
+// alone may list every tenant and create new tenant backends.
+func isPlatformAdmin(principal auth.Principal) bool {
+	return principal.HasAny(auth.RoleAdmin) && tenantOrDefault(principal.Tenant) == "default"
+}
+
+// canAdministerTenant authorizes a per-tenant backend operation: a platform
+// admin may manage any tenant; otherwise the caller may only manage their own
+// tenant or one where their name is listed in the tenant's Admins.
+func canAdministerTenant(principal auth.Principal, targetTenant string, record tenantBackendConfig, hasRecord bool) bool {
+	if !principal.HasAny(auth.RoleAdmin) {
+		return false
+	}
+	if isPlatformAdmin(principal) {
+		return true
+	}
+	if tenantOrDefault(principal.Tenant) == tenantOrDefault(targetTenant) {
+		return true
+	}
+	if hasRecord {
+		for _, name := range record.Admins {
+			if strings.EqualFold(strings.TrimSpace(name), strings.TrimSpace(principal.Name)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (a *App) handleTenants(w http.ResponseWriter, r *http.Request) {
 	principal := principalFromRequest(r)
-	if !principal.HasAny(auth.RoleAdmin) {
-		writeError(w, http.StatusForbidden, errors.New("admin role required"))
+	if !isPlatformAdmin(principal) {
+		writeError(w, http.StatusForbidden, errors.New("platform admin (default tenant) required"))
 		return
 	}
 	switch r.Method {
@@ -1163,9 +1192,14 @@ func (a *App) handleTenantBackend(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, errors.New("tenant not found"))
 		return
 	}
+	record, hasRecord := a.tenantRegistry.get(tenant)
+	if !canAdministerTenant(principal, tenant, record, hasRecord) {
+		writeError(w, http.StatusForbidden, errors.New("not authorized to administer this tenant"))
+		return
+	}
 	switch r.Method {
 	case http.MethodGet:
-		if record, ok := a.tenantRegistry.get(tenant); ok {
+		if hasRecord {
 			writeJSON(w, http.StatusOK, tenantConfigToMap(tenant, record))
 			return
 		}
@@ -2173,8 +2207,20 @@ func withSecurityHeaders(next http.Handler) http.Handler {
 	})
 }
 
+// requiresAuthEvenInOpenMode lists endpoints that must never be reachable
+// without configured authentication, regardless of open-mode passthrough.
+func requiresAuthEvenInOpenMode(path string) bool {
+	return path == "/api/gateway/proxy" || path == "/api/mcp/proxy"
+}
+
 func (a *App) withAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// SSRF-capable proxy endpoints must never be served without authentication,
+		// even in open mode, to avoid an unauthenticated internal-request vector.
+		if !a.authenticationConfigured() && requiresAuthEvenInOpenMode(r.URL.Path) {
+			writeError(w, http.StatusServiceUnavailable, errors.New("proxy endpoints require authentication to be configured"))
+			return
+		}
 		if !strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api/session" || strings.HasPrefix(r.URL.Path, "/api/sso/") || !a.authenticationConfigured() {
 			next.ServeHTTP(w, r)
 			return
