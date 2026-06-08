@@ -1983,25 +1983,13 @@ func sanitizeIdentifier(value string) string {
 }
 
 func (a *App) gatewayCriticalStart(w http.ResponseWriter) (func(), bool) {
-	if a.store != nil && a.store.PersistenceMode() == "postgres" {
-		release, ok, err := a.store.AcquireGatewayLease(context.Background(), cap(a.gatewayLimiter))
-		if err != nil {
-			a.gatewayMu.Lock()
-			a.gatewayRejected++
-			a.gatewayMu.Unlock()
-			writeError(w, http.StatusInternalServerError, err)
-			return nil, false
-		}
-		if !ok {
-			a.gatewayMu.Lock()
-			a.gatewayRejected++
-			a.gatewayMu.Unlock()
-			w.Header().Set("Retry-After", "1")
-			writeError(w, http.StatusTooManyRequests, errors.New("gateway is saturated"))
-			return nil, false
-		}
-		return release, true
-	}
+	// Per-instance backpressure via an in-process semaphore. This intentionally
+	// does NOT pin a database connection per in-flight request: the previous
+	// advisory-lock lease held a pooled *sql.Conn for the entire request, so when
+	// concurrent gateway calls exceeded the connection pool the handlers' own
+	// alert/action/audit writes could not acquire a connection and the critical
+	// decision path deadlocked (db.Conn was also called with a non-cancellable
+	// context, so saturation blocked indefinitely instead of returning 429).
 	if a.gatewayLimiter == nil {
 		return func() {}, true
 	}
