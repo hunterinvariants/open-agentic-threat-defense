@@ -240,6 +240,15 @@ CREATE INDEX IF NOT EXISTS idx_oatd_login_attempts_last_seen ON oatd_login_attem
 ALTER TABLE oatd_audit_chain_state
 ADD COLUMN IF NOT EXISTS anchor_hmac TEXT NOT NULL DEFAULT '';`,
 	},
+	{
+		Version: 4,
+		Name:    "assets_tenant_scope",
+		SQL: `
+ALTER TABLE oatd_assets ADD COLUMN IF NOT EXISTS tenant TEXT NOT NULL DEFAULT 'default';
+ALTER TABLE oatd_assets DROP CONSTRAINT IF EXISTS oatd_assets_pkey;
+ALTER TABLE oatd_assets ADD PRIMARY KEY (tenant, id);
+CREATE INDEX IF NOT EXISTS idx_oatd_assets_tenant ON oatd_assets (tenant);`,
+	},
 }
 
 func (s *Store) postgresLoad(ctx context.Context) error {
@@ -330,22 +339,26 @@ func (s *Store) postgresLoadActions(ctx context.Context) error {
 }
 
 func (s *Store) postgresLoadAssets(ctx context.Context) error {
-	rows, err := s.db.QueryContext(ctx, `SELECT data FROM oatd_assets`)
+	rows, err := s.db.QueryContext(ctx, `SELECT tenant, data FROM oatd_assets`)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	for rows.Next() {
+		var tenant string
 		var data []byte
-		if err := rows.Scan(&data); err != nil {
+		if err := rows.Scan(&tenant, &data); err != nil {
 			return err
 		}
 		var asset domain.Asset
 		if err := json.Unmarshal(data, &asset); err != nil {
 			return err
 		}
+		if asset.Tenant == "" {
+			asset.Tenant = tenantOrDefault(tenant)
+		}
 		if asset.ID != "" {
-			s.assets[asset.ID] = asset
+			s.assets[assetKey(asset.Tenant, asset.ID)] = asset
 		}
 	}
 	return rows.Err()
@@ -797,13 +810,13 @@ func (s *Store) postgresPersistAssetsLocked(ctx context.Context) error {
 			return err
 		}
 		if _, err := s.db.ExecContext(ctx, `
-INSERT INTO oatd_assets (id, last_seen, risk_score, data)
-VALUES ($1, $2, $3, $4)
-ON CONFLICT (id) DO UPDATE SET
+INSERT INTO oatd_assets (tenant, id, last_seen, risk_score, data)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (tenant, id) DO UPDATE SET
   last_seen = EXCLUDED.last_seen,
   risk_score = EXCLUDED.risk_score,
   data = EXCLUDED.data`,
-			asset.ID, nullableTime(asset.LastSeen), asset.RiskScore, data); err != nil {
+			tenantOrDefault(asset.Tenant), asset.ID, nullableTime(asset.LastSeen), asset.RiskScore, data); err != nil {
 			return err
 		}
 	}
@@ -817,13 +830,13 @@ func postgresInsertAssetsTx(ctx context.Context, tx *sql.Tx, assets map[string]d
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `
-INSERT INTO oatd_assets (id, last_seen, risk_score, data)
-VALUES ($1, $2, $3, $4)
-ON CONFLICT (id) DO UPDATE SET
+INSERT INTO oatd_assets (tenant, id, last_seen, risk_score, data)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (tenant, id) DO UPDATE SET
   last_seen = EXCLUDED.last_seen,
   risk_score = EXCLUDED.risk_score,
   data = EXCLUDED.data`,
-			asset.ID, nullableTime(asset.LastSeen), asset.RiskScore, data); err != nil {
+			tenantOrDefault(asset.Tenant), asset.ID, nullableTime(asset.LastSeen), asset.RiskScore, data); err != nil {
 			return err
 		}
 	}

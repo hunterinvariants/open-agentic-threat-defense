@@ -427,13 +427,21 @@ func (s *Store) RecordLoginAttempt(key string, success bool) (time.Duration, err
 	return s.postgresRecordLoginAttempt(key, success)
 }
 
+// assetKey scopes the in-memory asset map by tenant so two tenants sharing an
+// asset ID (commonly a hostname) cannot overwrite each other's record.
+func assetKey(tenant, id string) string {
+	return tenantOrDefault(tenant) + "\x00" + id
+}
+
 func (s *Store) upsertAssetLocked(event domain.Event) {
 	if event.AssetID == "" {
 		return
 	}
 
-	asset := s.assets[event.AssetID]
+	key := assetKey(event.Tenant, event.AssetID)
+	asset := s.assets[key]
 	asset.ID = event.AssetID
+	asset.Tenant = tenantOrDefault(event.Tenant)
 	if event.Hostname != "" {
 		asset.Hostname = event.Hostname
 	}
@@ -454,7 +462,7 @@ func (s *Store) upsertAssetLocked(event domain.Event) {
 	for k, v := range event.Metadata {
 		asset.Metadata[k] = v
 	}
-	s.assets[event.AssetID] = asset
+	s.assets[key] = asset
 }
 
 func (s *Store) raiseAssetRiskLocked(alert domain.Alert) {
@@ -462,8 +470,10 @@ func (s *Store) raiseAssetRiskLocked(alert domain.Alert) {
 		return
 	}
 
-	asset := s.assets[alert.AssetID]
+	key := assetKey(alert.Tenant, alert.AssetID)
+	asset := s.assets[key]
 	asset.ID = alert.AssetID
+	asset.Tenant = tenantOrDefault(alert.Tenant)
 	if asset.Hostname == "" {
 		asset.Hostname = alert.AssetID
 	}
@@ -471,7 +481,7 @@ func (s *Store) raiseAssetRiskLocked(alert domain.Alert) {
 	if asset.LastSeen.IsZero() {
 		asset.LastSeen = alert.CreatedAt
 	}
-	s.assets[alert.AssetID] = asset
+	s.assets[key] = asset
 }
 
 func contains(values []string, needle string) bool {

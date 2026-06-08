@@ -171,6 +171,54 @@ func TestPostgresAuditChainDetectsRecordTampering(t *testing.T) {
 	}
 }
 
+// H4: assets are scoped by (tenant, id) end-to-end, so two tenants sharing an
+// asset id persist and reload as separate, isolated records.
+func TestPostgresAssetsAreTenantScoped(t *testing.T) {
+	dsn := os.Getenv("OATD_TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("set OATD_TEST_POSTGRES_DSN to run Postgres integration tests")
+	}
+	s, err := NewWithPostgres(dsn)
+	if err != nil {
+		t.Fatalf("new postgres store: %v", err)
+	}
+	if s.SchemaVersion() < 4 {
+		t.Fatalf("expected the assets_tenant_scope migration (schema >= 4), got %d", s.SchemaVersion())
+	}
+	suffix := strings.ReplaceAll(time.Now().UTC().Format("20060102150405.000000000"), ".", "")
+	assetID := "shared-" + suffix
+	tenantA, tenantB := "ta-"+suffix, "tb-"+suffix
+	evtA, evtB := "evt-"+tenantA, "evt-"+tenantB
+	defer func() {
+		_, _ = s.db.Exec(`DELETE FROM oatd_assets WHERE id = $1`, assetID)
+		_, _ = s.db.Exec(`DELETE FROM oatd_events WHERE id IN ($1, $2)`, evtA, evtB)
+		_ = s.Close()
+	}()
+
+	if err := s.AddEvent(domain.Event{ID: evtA, Tenant: tenantA, Kind: domain.EventAgentToolCall, AssetID: assetID, Hostname: assetID, SourceIP: "10.0.0.1", Timestamp: time.Now().UTC()}); err != nil {
+		t.Fatalf("add event a: %v", err)
+	}
+	if err := s.AddEvent(domain.Event{ID: evtB, Tenant: tenantB, Kind: domain.EventAgentToolCall, AssetID: assetID, Hostname: assetID, SourceIP: "10.9.9.9", Timestamp: time.Now().UTC()}); err != nil {
+		t.Fatalf("add event b: %v", err)
+	}
+
+	// Reload from the database to exercise the tenant-keyed persist and load.
+	loaded, err := NewWithPostgres(dsn)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	defer loaded.Close()
+
+	a := loaded.ListAssetsForTenant(tenantA)
+	b := loaded.ListAssetsForTenant(tenantB)
+	if len(a) != 1 || len(b) != 1 {
+		t.Fatalf("each tenant must reload exactly its own asset, got a=%d b=%d", len(a), len(b))
+	}
+	if !contains(a[0].IPs, "10.0.0.1") || contains(a[0].IPs, "10.9.9.9") {
+		t.Fatalf("cross-tenant asset leak after reload: %+v", a[0].IPs)
+	}
+}
+
 func cleanupPostgresIntegrationRows(t *testing.T, s *Store, ids ...string) {
 	t.Helper()
 	if s == nil || s.db == nil {
