@@ -1,6 +1,9 @@
 package policy
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -17,6 +20,7 @@ type Engine struct {
 	cfgMu               sync.RWMutex
 	approvedTools       map[string]struct{}
 	toolProvenance      map[string]ToolProvenanceEntry
+	agentIdentities     map[string]AgentIdentity
 	approvedEgressHosts map[string]struct{}
 	pack                ThreatPack
 	deceptionMu         sync.RWMutex
@@ -34,6 +38,18 @@ type Config struct {
 	ThreatPack          ThreatPack
 	DeceptionTokens     []domain.DeceptionToken
 	ToolProvenance      []ToolProvenanceEntry
+	AgentIdentities     []AgentIdentity
+}
+
+// AgentIdentity registers a known agent and the SHA-256 of its identity token.
+// When any identities are configured, the gateway attributes each tool call to a
+// verified agent: an unknown agent or a bad/missing token is gated for approval,
+// and a token that does not match a claimed agent id is denied as impersonation.
+// Compute KeyHash with `oadtdctl token-hash`. Opt-in: with none configured,
+// identity is not enforced.
+type AgentIdentity struct {
+	AgentID string `json:"agent_id"`
+	KeyHash string `json:"key_sha256"`
 }
 
 // ToolProvenanceEntry declares the expected provenance of an agent tool: the
@@ -88,6 +104,15 @@ func New(config Config) *Engine {
 			Fingerprint: strings.TrimSpace(entry.Fingerprint),
 		}
 	}
+	agentIdentities := make(map[string]AgentIdentity, len(config.AgentIdentities))
+	for _, entry := range config.AgentIdentities {
+		id := strings.ToLower(strings.TrimSpace(entry.AgentID))
+		hash := strings.ToLower(strings.TrimSpace(entry.KeyHash))
+		if id == "" || hash == "" {
+			continue
+		}
+		agentIdentities[id] = AgentIdentity{AgentID: id, KeyHash: hash}
+	}
 	pack := config.ThreatPack
 	if err := pack.Validate(); err != nil {
 		pack = DefaultThreatPack()
@@ -113,6 +138,7 @@ func New(config Config) *Engine {
 	engine := &Engine{
 		approvedTools:       approvedTools,
 		toolProvenance:      toolProvenance,
+		agentIdentities:     agentIdentities,
 		approvedEgressHosts: approvedEgressHosts,
 		pack:                pack,
 		deception:           make(map[string]domain.DeceptionToken),
@@ -182,6 +208,49 @@ func (e *Engine) checkToolProvenance(tool string, request domain.ToolCallRequest
 	return provenanceVerified
 }
 
+type agentIdentityStatus int
+
+const (
+	agentNotRequired  agentIdentityStatus = iota // no agent registry configured
+	agentVerified                                // claimed agent id + token match a registered agent
+	agentUnidentified                            // registry configured but no agent id claimed
+	agentUnknown                                 // claimed agent id is not registered
+	agentMismatch                                // claimed agent id is registered but the token is wrong
+)
+
+// checkAgentIdentity attributes a tool call to a verified agent. It is opt-in:
+// with no registered identities it returns agentNotRequired and behaviour is
+// unchanged. When identities are configured, a free-text actor is no longer
+// trusted — the call must present a registered agent id and a token that hashes
+// to that agent's KeyHash.
+func (e *Engine) checkAgentIdentity(request domain.ToolCallRequest) agentIdentityStatus {
+	e.cfgMu.RLock()
+	count := len(e.agentIdentities)
+	entry, ok := e.agentIdentities[strings.ToLower(strings.TrimSpace(request.AgentID))]
+	e.cfgMu.RUnlock()
+	if count == 0 {
+		return agentNotRequired
+	}
+	if strings.TrimSpace(request.AgentID) == "" {
+		return agentUnidentified
+	}
+	if !ok {
+		return agentUnknown
+	}
+	if strings.TrimSpace(request.AgentToken) == "" {
+		return agentMismatch
+	}
+	if subtle.ConstantTimeCompare([]byte(hashAgentToken(request.AgentToken)), []byte(entry.KeyHash)) != 1 {
+		return agentMismatch
+	}
+	return agentVerified
+}
+
+func hashAgentToken(token string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(token)))
+	return hex.EncodeToString(sum[:])
+}
+
 // Reload atomically swaps the detection configuration (approved tools, egress
 // hosts, and threat pack) without a restart. Gateway call history is preserved.
 func (e *Engine) Reload(config Config) {
@@ -189,6 +258,7 @@ func (e *Engine) Reload(config Config) {
 	e.cfgMu.Lock()
 	e.approvedTools = rebuilt.approvedTools
 	e.toolProvenance = rebuilt.toolProvenance
+	e.agentIdentities = rebuilt.agentIdentities
 	e.approvedEgressHosts = rebuilt.approvedEgressHosts
 	e.pack = rebuilt.pack
 	e.cfgMu.Unlock()

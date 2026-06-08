@@ -145,6 +145,7 @@ func (e *Engine) assessGatewayRequest(request domain.ToolCallRequest, tool strin
 	reason := fmt.Sprintf("tool %q matched the approved manifest", tool)
 	risk := severityForAlerts(alerts)
 	provenance := e.checkToolProvenance(tool, request)
+	agentIdentity := e.checkAgentIdentity(request)
 
 	switch {
 	case strings.TrimSpace(request.ToolName) == "":
@@ -164,6 +165,11 @@ func (e *Engine) assessGatewayRequest(request domain.ToolCallRequest, tool strin
 		reason = fmt.Sprintf("tool %q provenance mismatch — possible tool spoofing or tampering", tool)
 		risk = maxSeverity(risk, domain.SeverityCritical)
 		findings = append(findings, "provenance=mismatch")
+	case agentIdentity == agentMismatch:
+		verdict = domain.GatewayDeny
+		reason = fmt.Sprintf("agent identity verification failed for %q — possible impersonation", request.AgentID)
+		risk = maxSeverity(risk, domain.SeverityCritical)
+		findings = append(findings, "agent_identity=mismatch")
 	default:
 		if len(taint.Flows) > 0 {
 			findings = append(findings, taint.Flows...)
@@ -260,6 +266,16 @@ func (e *Engine) assessGatewayRequest(request domain.ToolCallRequest, tool strin
 			reason = fmt.Sprintf("tool %q is missing required provenance and needs operator approval", tool)
 			risk = maxSeverity(risk, domain.SeverityHigh)
 			findings = append(findings, "provenance=missing")
+		} else if agentIdentity == agentUnknown {
+			verdict = domain.GatewayRequireApproval
+			reason = fmt.Sprintf("unregistered agent identity %q requires operator approval", request.AgentID)
+			risk = maxSeverity(risk, domain.SeverityHigh)
+			findings = append(findings, "agent_identity=unknown")
+		} else if agentIdentity == agentUnidentified {
+			verdict = domain.GatewayRequireApproval
+			reason = "unidentified agent requires operator approval"
+			risk = maxSeverity(risk, domain.SeverityHigh)
+			findings = append(findings, "agent_identity=unidentified")
 		}
 	}
 

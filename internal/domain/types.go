@@ -74,6 +74,8 @@ type ToolCallRequest struct {
 	AssetID         string            `json:"asset_id"`
 	Hostname        string            `json:"hostname"`
 	Actor           string            `json:"actor"`
+	AgentID         string            `json:"agent_id,omitempty"`
+	AgentToken      string            `json:"agent_token,omitempty"`
 	ToolName        string            `json:"tool_name"`
 	ToolFingerprint string            `json:"tool_fingerprint,omitempty"`
 	ToolPublisher   string            `json:"tool_publisher,omitempty"`

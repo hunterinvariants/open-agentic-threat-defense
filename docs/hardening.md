@@ -107,6 +107,15 @@ operator checklist for a hardened deployment. It complements
   tools without an entry are unaffected. This is a supply-chain control for the
   agent's tool surface, complementing the approved-tool allowlist.
 
+### Agent identity
+- Agents can be registered in `policy.json` (`agent_identities`: `agent_id` +
+  `key_sha256`, the SHA-256 of the agent's identity token from
+  `oadtdctl token-hash`). When any identity is configured the gateway stops
+  trusting the free-text actor: a call must present a registered `agent_id` and a
+  matching `agent_token`. A **token mismatch is denied** (impersonation), an
+  **unknown or unidentified agent requires approval**, and a verified identity
+  passes. Opt-in — with no registry configured, identity is not enforced.
+
 ### Supply chain / CI
 - All third-party GitHub Actions pinned to commit SHAs (including `setup-go`);
   CodeQL, Dependabot (gomod + actions), and dependency-review enabled.

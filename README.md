@@ -20,6 +20,10 @@ malware behavior, or autonomous propagation. Demo data generates telemetry only.
 - Tool-provenance verification: when a signed tool fingerprint is declared for a
   tool, the gateway denies a provenance mismatch (spoofed/tampered tool) and
   gates a missing fingerprint — supply-chain control for agent tools.
+- Agent-identity verification: registered agents present a signed identity token;
+  the gateway denies impersonation (token mismatch) and gates unknown or
+  unidentified agents, so tool calls are attributed to a verified agent rather
+  than a spoofable actor string.
 - Inline tool-call PEP for enforce-before-execute decisions at the tool
   boundary, backed by a separate PDP endpoint for diagnostics.
 - Gateway queue, approval polling, a transport proxy for tool backends, and an

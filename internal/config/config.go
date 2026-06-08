@@ -19,6 +19,7 @@ type Config struct {
 	ThreatPackPath      string                       `json:"threat_pack_path"`
 	Users               []auth.UserConfig            `json:"users"`
 	ToolProvenance      []policy.ToolProvenanceEntry `json:"tool_provenance,omitempty"`
+	AgentIdentities     []policy.AgentIdentity       `json:"agent_identities,omitempty"`
 }
 
 func Load(path string) (Config, error) {
@@ -55,6 +56,7 @@ func (c Config) PolicyConfig() (policy.Config, error) {
 		ApprovedEgressHosts: append([]string(nil), c.ApprovedEgressHosts...),
 		ThreatPack:          pack,
 		ToolProvenance:      append([]policy.ToolProvenanceEntry(nil), c.ToolProvenance...),
+		AgentIdentities:     append([]policy.AgentIdentity(nil), c.AgentIdentities...),
 	}, nil
 }
 

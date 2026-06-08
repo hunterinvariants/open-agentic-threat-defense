@@ -324,3 +324,51 @@ func TestGateToolCallProvenanceNotRequiredForUnlistedTool(t *testing.T) {
 		t.Fatalf("tool without a provenance entry should be unaffected, got %s (%s)", decision.Verdict, decision.Reason)
 	}
 }
+
+func TestGateToolCallVerifiesAgentIdentity(t *testing.T) {
+	engine := New(Config{
+		ApprovedTools:   []string{"asset_inventory"},
+		AgentIdentities: []AgentIdentity{{AgentID: "agent-7", KeyHash: hashAgentToken("agent-secret")}},
+	})
+
+	verified := engine.GateToolCall(domain.ToolCallRequest{
+		ID: "a1", AssetID: "h", Actor: "x", ToolName: "asset_inventory", Command: "list",
+		AgentID: "agent-7", AgentToken: "agent-secret",
+	})
+	if verified.Verdict != domain.GatewayAllow {
+		t.Fatalf("verified agent should allow, got %s (%s)", verified.Verdict, verified.Reason)
+	}
+
+	impersonation := engine.GateToolCall(domain.ToolCallRequest{
+		ID: "a2", AssetID: "h", Actor: "x", ToolName: "asset_inventory", Command: "list",
+		AgentID: "agent-7", AgentToken: "WRONG",
+	})
+	if impersonation.Verdict != domain.GatewayDeny {
+		t.Fatalf("agent token mismatch should deny, got %s (%s)", impersonation.Verdict, impersonation.Reason)
+	}
+
+	unknown := engine.GateToolCall(domain.ToolCallRequest{
+		ID: "a3", AssetID: "h", Actor: "x", ToolName: "asset_inventory", Command: "list",
+		AgentID: "ghost", AgentToken: "whatever",
+	})
+	if unknown.Verdict != domain.GatewayRequireApproval {
+		t.Fatalf("unknown agent should require approval, got %s (%s)", unknown.Verdict, unknown.Reason)
+	}
+
+	unidentified := engine.GateToolCall(domain.ToolCallRequest{
+		ID: "a4", AssetID: "h", Actor: "x", ToolName: "asset_inventory", Command: "list",
+	})
+	if unidentified.Verdict != domain.GatewayRequireApproval {
+		t.Fatalf("unidentified agent should require approval, got %s (%s)", unidentified.Verdict, unidentified.Reason)
+	}
+}
+
+func TestGateToolCallAgentIdentityNotRequiredByDefault(t *testing.T) {
+	engine := NewDefault()
+	decision := engine.GateToolCall(domain.ToolCallRequest{
+		ID: "a5", AssetID: "h", Actor: "x", ToolName: "asset_inventory", Command: "list assets",
+	})
+	if decision.Verdict != domain.GatewayAllow {
+		t.Fatalf("with no agent registry, calls should be unaffected, got %s (%s)", decision.Verdict, decision.Reason)
+	}
+}
