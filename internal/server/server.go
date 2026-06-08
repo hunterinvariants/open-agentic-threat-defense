@@ -309,7 +309,7 @@ func (a *App) Routes() http.Handler {
 		mux.Handle("/saml/", a.saml)
 	}
 	mux.Handle("/", a.staticHandler())
-	return withSecurityHeaders(a.withAuth(mux))
+	return withSecurityHeaders(a.withAuth(withBodyLimit(mux)))
 }
 
 func (a *App) LoadDemo() ([]domain.Alert, error) {
@@ -1834,7 +1834,14 @@ func (a *App) ingest(events []domain.Event, tenant string) ([]domain.Alert, erro
 		alerts = append(alerts, a.policy.Evaluate(events[i])...)
 	}
 
-	alerts = append(alerts, a.correlator.Evaluate(a.listEventsForTenant(tenant))...)
+	// Bound the correlator's input to the most recent events so a tenant flooding
+	// a single asset id cannot drive O(n^2) re-evaluation cost on every ingest.
+	// listEventsForTenant is newest-first, so the head is the most recent window.
+	correlationEvents := a.listEventsForTenant(tenant)
+	if len(correlationEvents) > maxCorrelationEvents {
+		correlationEvents = correlationEvents[:maxCorrelationEvents]
+	}
+	alerts = append(alerts, a.correlator.Evaluate(correlationEvents)...)
 	a.prepareAlerts(alerts, tenant)
 	added, err := a.addAlertsForTenant(alerts, tenant)
 	if err != nil {
@@ -2204,6 +2211,26 @@ func writeError(w http.ResponseWriter, status int, err error) {
 
 func methodNotAllowed(w http.ResponseWriter) {
 	writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+}
+
+const maxRequestBodyBytes = 4 << 20 // 4 MiB
+
+// maxCorrelationEvents bounds how many recent events the correlator scans per
+// ingest, capping the cost of the per-asset sequence analysis.
+const maxCorrelationEvents = 5000
+
+// withBodyLimit caps the request body on mutating methods so an oversized POST
+// cannot drive proportional memory allocation (DoS) through the JSON decoders.
+func withBodyLimit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost, http.MethodPut, http.MethodPatch:
+			if r.Body != nil {
+				r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func withSecurityHeaders(next http.Handler) http.Handler {
