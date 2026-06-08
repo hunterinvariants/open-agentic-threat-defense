@@ -399,6 +399,44 @@ The panel reads the files the validation timer writes — no re-running of the
 suite on page load, so it never touches the live gateway from the browser. The
 trend appears once at least two runs have been recorded.
 
+## MCP integration demo
+
+`oadtdctl mcp-demo` proves the gateway secures a real MCP client end-to-end: it
+drives a curated sequence of MCP tool calls through the reverse-proxy
+(`/api/mcp/proxy`) to a real upstream MCP server and scores each as forwarded,
+gated for approval, or blocked. Use the bundled `oadtdctl mcp-stub` as the
+upstream:
+
+```bash
+# 1) a reference upstream MCP server
+oadtdctl mcp-stub --addr 127.0.0.1:9100 &
+
+# 2) OADTD with the MCP upstream configured (auth is required for the proxy)
+OATD_SESSION_SECRET=… oadtd --addr 127.0.0.1:8080 --api-token "$TOKEN" \
+  --mcp-upstream-url http://127.0.0.1:9100 &
+
+# 3) drive a real MCP client through the proxy and score enforcement
+oadtdctl mcp-demo --url http://127.0.0.1:8080 --token "$TOKEN"
+```
+
+Expected: `tools/list` and a benign `tools/call` are forwarded; a secret-bearing
+`tools/call`, an external `resources/read`, and an injection `prompts/get` are
+gated for approval; an unapproved `tools/call` is blocked — `6/6 enforced as
+expected`.
+
+## Inline-PEP benchmark
+
+`oadtdctl bench` measures the latency the inline gateway adds to each decision:
+
+```bash
+oadtdctl bench --url http://127.0.0.1:8080 --token "$TOKEN" --requests 5000 --concurrency 32
+```
+
+It reports throughput and p50/p90/p99/max latency. The decision logic itself is
+sub-100µs (see `go test -bench BenchmarkGateToolCall ./internal/policy`); the
+end-to-end figure is dominated by the HTTP round-trip, so run it on the target
+host (loopback latency on some platforms inflates the number).
+
 ## Audit Log
 
 The service records audit events for authentication failures, RBAC denials,

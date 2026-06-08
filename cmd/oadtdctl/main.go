@@ -73,6 +73,18 @@ func main() {
 		if err := validateCommand(os.Args[2:]); err != nil {
 			log.Fatal(err)
 		}
+	case "mcp-stub":
+		if err := mcpStubCommand(os.Args[2:]); err != nil {
+			log.Fatal(err)
+		}
+	case "mcp-demo":
+		if err := mcpDemoCommand(os.Args[2:]); err != nil {
+			log.Fatal(err)
+		}
+	case "bench":
+		if err := benchCommand(os.Args[2:]); err != nil {
+			log.Fatal(err)
+		}
 	default:
 		usage()
 		os.Exit(2)
@@ -753,6 +765,9 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  oadtdctl token-hash --token TOKEN")
 	fmt.Fprintln(os.Stderr, "  oadtdctl wedge-demo [--url http://localhost:8080] [--approved-by operator] [--await-approval]")
 	fmt.Fprintln(os.Stderr, "  oadtdctl validate [--url http://localhost:8080] [--token TOKEN] [--json]")
+	fmt.Fprintln(os.Stderr, "  oadtdctl mcp-stub [--addr 127.0.0.1:9100]")
+	fmt.Fprintln(os.Stderr, "  oadtdctl mcp-demo [--url http://localhost:8080] [--token TOKEN] [--json]")
+	fmt.Fprintln(os.Stderr, "  oadtdctl bench [--url http://localhost:8080] [--token TOKEN] [--requests N] [--concurrency N]")
 	fmt.Fprintln(os.Stderr, "  oadtdctl sign-manifest --file threatpack.manifest.json")
 	fmt.Fprintln(os.Stderr, "  oadtdctl license keygen")
 	fmt.Fprintln(os.Stderr, "  oadtdctl license issue --private-key KEY --org ACME [--features sso,multi-tenant] [--valid-for 8760h]")
