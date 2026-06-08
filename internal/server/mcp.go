@@ -387,12 +387,20 @@ func sanitizeProxyHeaders(headers map[string]string) map[string]string {
 }
 
 func (a *App) toolCallFromMCPRequest(rpc mcpJSONRPCRequest) domain.ToolCallRequest {
+	method := strings.TrimSpace(rpc.Method)
+	surface := mcpSurface(method)
 	toolCall := domain.ToolCallRequest{
-		ToolName: "mcp_" + strings.TrimSpace(rpc.Method),
-		Signal:   "mcp_method=" + strings.TrimSpace(rpc.Method),
+		ToolName: "mcp_" + method,
+		Signal:   "mcp_method=" + method + " mcp_surface=" + surface,
+		Labels:   []string{"mcp", "mcp_surface:" + surface},
 		Metadata: map[string]string{
-			"mcp_method": rpc.Method,
+			"mcp_method":  method,
+			"mcp_surface": surface,
 		},
+		// Only tools/call is a real user-tool invocation subject to the approved
+		// tool list. Other known action surfaces are protocol operations gated on
+		// content; "other"/unknown methods stay invocation-gated (fail-closed).
+		ProtocolSurface: surface != "tool" && surface != "other",
 	}
 	if strings.TrimSpace(a.gatewayMCPUpstream()) != "" {
 		toolCall.Metadata["mcp_upstream_url"] = a.gatewayMCPUpstream()
@@ -406,12 +414,15 @@ func (a *App) toolCallFromMCPRequest(rpc mcpJSONRPCRequest) domain.ToolCallReque
 		toolCall.Command = string(rpc.Params)
 		return toolCall
 	}
-	if value, ok := stringFromAny(params["name"]); ok {
+	if value, ok := stringFromAny(params["name"]); ok && surface == "tool" {
 		toolCall.ToolName = value
 	}
 	if value, ok := stringFromAny(params["uri"]); ok {
 		toolCall.Command = value
 		toolCall.Arguments = value
+		if surface == "resource" && (strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://")) {
+			toolCall.Destination = value
+		}
 	}
 	if value, ok := stringFromAny(params["arguments"]); ok {
 		toolCall.Arguments = value
@@ -440,12 +451,42 @@ func shouldInterceptMCPMethod(method string) bool {
 	return !isMCPPassthroughMethod(method)
 }
 
+// isMCPPassthroughMethod lists lifecycle, read-only enumeration, and notification
+// methods that are not security-relevant tool actions and are forwarded without
+// gating. Everything else is intercepted.
 func isMCPPassthroughMethod(method string) bool {
-	switch strings.TrimSpace(method) {
-	case "initialize", "notifications/initialized", "ping":
+	m := strings.TrimSpace(method)
+	if strings.HasPrefix(m, "notifications/") {
+		return true
+	}
+	switch m {
+	case "initialize", "ping",
+		"tools/list", "resources/list", "resources/templates/list",
+		"prompts/list", "roots/list":
 		return true
 	default:
 		return false
+	}
+}
+
+// mcpSurface classifies an MCP method into a security surface. tools/call is a
+// real user-tool invocation; resource/prompt/sampling/completion are protocol
+// action surfaces gated on content; anything else is "other" (intercepted and,
+// being an unknown invocation, fail-closed against the approved-tool list).
+func mcpSurface(method string) string {
+	switch strings.TrimSpace(method) {
+	case "tools/call":
+		return "tool"
+	case "resources/read", "resources/subscribe":
+		return "resource"
+	case "prompts/get":
+		return "prompt"
+	case "sampling/createMessage":
+		return "sampling"
+	case "completion/complete":
+		return "completion"
+	default:
+		return "other"
 	}
 }
 

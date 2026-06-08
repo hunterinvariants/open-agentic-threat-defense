@@ -68,17 +68,21 @@ type DeceptionToken struct {
 }
 
 type ToolCallRequest struct {
-	ID              string            `json:"id"`
-	Timestamp       time.Time         `json:"timestamp"`
-	Tenant          string            `json:"tenant,omitempty"`
-	AssetID         string            `json:"asset_id"`
-	Hostname        string            `json:"hostname"`
-	Actor           string            `json:"actor"`
-	AgentID         string            `json:"agent_id,omitempty"`
-	AgentToken      string            `json:"agent_token,omitempty"`
-	ToolName        string            `json:"tool_name"`
-	ToolFingerprint string            `json:"tool_fingerprint,omitempty"`
-	ToolPublisher   string            `json:"tool_publisher,omitempty"`
+	ID              string    `json:"id"`
+	Timestamp       time.Time `json:"timestamp"`
+	Tenant          string    `json:"tenant,omitempty"`
+	AssetID         string    `json:"asset_id"`
+	Hostname        string    `json:"hostname"`
+	Actor           string    `json:"actor"`
+	AgentID         string    `json:"agent_id,omitempty"`
+	AgentToken      string    `json:"agent_token,omitempty"`
+	ToolName        string    `json:"tool_name"`
+	ToolFingerprint string    `json:"tool_fingerprint,omitempty"`
+	ToolPublisher   string    `json:"tool_publisher,omitempty"`
+	// ProtocolSurface marks a call as an MCP protocol operation (e.g. a
+	// resource read or prompt fetch) rather than a user-tool invocation, so the
+	// gateway evaluates its content but does not apply the approved-tool allowlist.
+	ProtocolSurface bool              `json:"protocol_surface,omitempty"`
 	Command         string            `json:"command,omitempty"`
 	Arguments       string            `json:"arguments,omitempty"`
 	Signal          string            `json:"signal,omitempty"`

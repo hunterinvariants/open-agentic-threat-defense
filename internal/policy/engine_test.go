@@ -372,3 +372,36 @@ func TestGateToolCallAgentIdentityNotRequiredByDefault(t *testing.T) {
 		t.Fatalf("with no agent registry, calls should be unaffected, got %s (%s)", decision.Verdict, decision.Reason)
 	}
 }
+
+func TestGateToolCallProtocolSurfaceSkipsAllowlist(t *testing.T) {
+	engine := NewDefault()
+
+	// A protocol surface (e.g. an MCP resource read) with an unlisted synthetic
+	// tool name and benign content must NOT be denied as unapproved.
+	benign := engine.GateToolCall(domain.ToolCallRequest{
+		ID: "ps1", AssetID: "h", Actor: "a", ToolName: "mcp_resources/read",
+		Command: "read local config", ProtocolSurface: true,
+	})
+	if benign.Verdict == domain.GatewayDeny {
+		t.Fatalf("protocol surface should not be denied as unapproved, got %s (%s)", benign.Verdict, benign.Reason)
+	}
+
+	// Content is still gated: a secret reference still requires approval.
+	secret := engine.GateToolCall(domain.ToolCallRequest{
+		ID: "ps2", AssetID: "h", Actor: "a", ToolName: "mcp_resources/read",
+		Command: "read the api_key from env", ProtocolSurface: true,
+	})
+	if secret.Verdict != domain.GatewayRequireApproval {
+		t.Fatalf("protocol surface content should still be gated, got %s (%s)", secret.Verdict, secret.Reason)
+	}
+
+	// The same synthetic name as a real invocation (not a protocol surface) is
+	// still denied: the allowlist applies.
+	invocation := engine.GateToolCall(domain.ToolCallRequest{
+		ID: "ps3", AssetID: "h", Actor: "a", ToolName: "mcp_resources/read",
+		Command: "read local config",
+	})
+	if invocation.Verdict != domain.GatewayDeny {
+		t.Fatalf("non-protocol unlisted tool should be denied, got %s", invocation.Verdict)
+	}
+}

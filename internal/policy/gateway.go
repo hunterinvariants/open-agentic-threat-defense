@@ -38,6 +38,12 @@ func (e *Engine) GateToolCall(request domain.ToolCallRequest) domain.ToolCallDec
 	}
 
 	alerts := e.Evaluate(event)
+	if request.ProtocolSurface {
+		// A protocol operation (e.g. an MCP resource read) is not a user-tool
+		// invocation, so the approved-tool allowlist does not apply — gate on
+		// content only.
+		alerts = filterOutAlertRule(alerts, "agent.tool.unapproved")
+	}
 	if request.Destination != "" && isExternalDestination(request.Destination) && !e.egressApprovedForTenant(request.Tenant, request.Destination) {
 		alerts = append(alerts, newAlert(
 			"network.egress.unknown",
@@ -395,6 +401,16 @@ func hasAlertRule(alerts []domain.Alert, ruleID string) bool {
 		}
 	}
 	return false
+}
+
+func filterOutAlertRule(alerts []domain.Alert, ruleID string) []domain.Alert {
+	out := alerts[:0]
+	for _, alert := range alerts {
+		if alert.RuleID != ruleID {
+			out = append(out, alert)
+		}
+	}
+	return out
 }
 
 func metadataText(metadata map[string]string) string {

@@ -116,6 +116,17 @@ operator checklist for a hardened deployment. It complements
   **unknown or unidentified agent requires approval**, and a verified identity
   passes. Opt-in — with no registry configured, identity is not enforced.
 
+### MCP surface coverage
+- The MCP reverse-proxy classifies each method by surface. Lifecycle, read-only
+  enumeration, and notification methods (`initialize`, `ping`, `tools/list`,
+  `resources/list`, `prompts/list`, `roots/list`, `notifications/*`) pass through.
+  `tools/call` is gated as a real tool invocation (the approved-tool list
+  applies). The other action surfaces — `resources/read`/`subscribe`,
+  `prompts/get`, `sampling/createMessage`, `completion/complete` — are gated on
+  **content** as protocol operations (the allowlist does not apply, but secret,
+  injection, egress and other detections do; an external `resources/read` URI is
+  evaluated as egress). Unknown methods stay invocation-gated and fail closed.
+
 ### Supply chain / CI
 - All third-party GitHub Actions pinned to commit SHAs (including `setup-go`);
   CodeQL, Dependabot (gomod + actions), and dependency-review enabled.
