@@ -15,14 +15,19 @@ func TestVerdictRankOrdering(t *testing.T) {
 
 func TestValidationCasesWellFormed(t *testing.T) {
 	cases := validationCases("validation-agent")
-	if len(cases) < 5 {
+	if len(cases) < 8 {
 		t.Fatalf("expected a meaningful emulation library, got %d", len(cases))
 	}
 	sawBenign := false
+	names := make(map[string]bool, len(cases))
 	for _, c := range cases {
-		if c.name == "" || c.technique == "" {
-			t.Fatalf("case missing name/technique: %+v", c)
+		if c.name == "" || c.technique == "" || c.tactic == "" {
+			t.Fatalf("case missing name/technique/tactic: %+v", c)
 		}
+		if names[c.name] {
+			t.Fatalf("duplicate case name %q", c.name)
+		}
+		names[c.name] = true
 		switch c.want {
 		case domain.GatewayAllow, domain.GatewayRequireApproval, domain.GatewayDeny:
 		default:

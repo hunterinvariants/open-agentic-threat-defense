@@ -1,0 +1,45 @@
+[Unit]
+Description=OADTD detection validation (benign ATT&CK emulation suite)
+After=oadtd.service
+Wants=oadtd.service
+
+[Service]
+Type=oneshot
+User=oadtd
+Group=oadtd
+WorkingDirectory=/opt/oadtd/current
+# Validates the inline gateway against benign, ATT&CK-mapped emulations using a
+# least-privilege 'ingestor' validation token. The token file must be readable by
+# the oadtd user (chown oadtd:oadtd /etc/oadtd/validation.token; chmod 600).
+# A detection regression makes oadtdctl exit non-zero, which marks this unit
+# failed — pair with an OnFailure= drop-in to alert (or use --continuous --webhook).
+ExecStart=/opt/oadtd/current/oadtdctl validate --url http://127.0.0.1:8080 --token-file /etc/oadtd/validation.token
+EnvironmentFile=-/etc/oadtd/validate.env
+
+# Sandbox hardening
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+RemoveIPC=true
+UMask=0077

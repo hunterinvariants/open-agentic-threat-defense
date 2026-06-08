@@ -489,7 +489,11 @@ go run ./cmd/oadtdctl validate --url http://localhost:8080 --token $env:OATD_API
 ```
 
 Use it after upgrades or policy changes as a detection regression check; a
-non-zero exit means an expected verdict did not hold. Add `--json` for CI.
+non-zero exit means an expected verdict did not hold. Add `--json` for CI,
+`--coverage` for an ATT&CK tactic/technique coverage map, or `--continuous
+--interval 1h --webhook <url>` to run it as a long-lived monitor that alerts on
+regression. Schedule it with the packaged `oadtd-validate.timer` (see
+[docs/operations.md](docs/operations.md)).
 
 Normalize external defensive logs to OATD JSONL:
 

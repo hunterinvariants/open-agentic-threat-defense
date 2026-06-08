@@ -1,0 +1,13 @@
+[Unit]
+Description=Run OADTD detection validation periodically
+
+[Timer]
+# First run shortly after boot, then hourly. RandomizedDelaySec spreads load and
+# avoids a thundering herd if many hosts share a deploy window.
+OnBootSec=10min
+OnUnitActiveSec=1h
+RandomizedDelaySec=2min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

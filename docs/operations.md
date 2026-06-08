@@ -274,7 +274,9 @@ go run ./cmd/oadtdctl agent --source journald --journal-unit ssh.service --url h
 realistic agent threat patterns on your own authorized deployment. It runs a
 curated library of benign, MITRE ATT&CK-mapped tool-call emulations through the
 read-only `/api/gateway/decide` endpoint and scores each against its expected
-verdict, plus a benign baseline to catch false positives.
+verdict, plus a benign baseline to catch false positives. Each emulation is
+tagged with its own gateway history key, so results are deterministic and
+order-independent across repeated runs.
 
 ```powershell
 go run ./cmd/oadtdctl validate --url http://localhost:8080 --token $env:OATD_API_TOKEN
@@ -287,17 +289,49 @@ gate a deploy. Add `--json` for machine-readable output in CI. Sample run:
 
 ```text
 oadtdctl validate — agent-gateway detection validation
-  PASS  -            benign-baseline             want=allow                  got=allow
-  PASS  T1552.001    secret-in-context           want=>=require_approval     got=require_approval
-  PASS  T1057        discovery-chain             want=>=require_approval     got=require_approval
-  PASS  T1059        prompt-injection            want=>=require_approval     got=require_approval
-  PASS  T1027        obfuscated-secret           want=>=require_approval     got=require_approval
-  PASS  T1567        unapproved-egress           want=>=require_approval     got=require_approval
-  PASS  T1530        canary-touch                want=>=deny                 got=deny
-  PASS  TA0002       unapproved-tool             want=>=deny                 got=deny
+  PASS  -            benign-baseline         want=allow                  got=allow
+  PASS  T1552.001    secret-in-context       want=>=require_approval     got=require_approval
+  PASS  T1057        discovery-chain         want=>=require_approval     got=require_approval
+  PASS  T1083        file-discovery          want=>=require_approval     got=require_approval
+  PASS  T1059        prompt-injection        want=>=require_approval     got=require_approval
+  PASS  T1027        obfuscated-secret       want=>=require_approval     got=require_approval
+  PASS  T1140        deobfuscate-execute     want=>=require_approval     got=require_approval
+  PASS  T1071.001    web-c2-beacon           want=>=require_approval     got=require_approval
+  PASS  T1567        unapproved-egress       want=>=require_approval     got=require_approval
+  PASS  T1530        canary-touch            want=>=deny                 got=deny
+  PASS  TA0002       unapproved-tool         want=>=deny                 got=deny
 
-Summary: 8/8 held  (0 missed, 0 false positives)
+Summary: 11/11 held  (0 missed, 0 false positives)
 ```
+
+### ATT&CK coverage map
+
+`--coverage` groups the same run by tactic/technique and marks each `HELD` or
+`GAP`, for a coverage report you can attach to an audit:
+
+```powershell
+go run ./cmd/oadtdctl validate --url http://localhost:8080 --token $env:OATD_API_TOKEN --coverage
+```
+
+### Continuous monitoring and scheduling
+
+For ongoing assurance, validate on a schedule. Two options:
+
+- **systemd timer (recommended):** install the packaged
+  `oadtd-validate.service` (oneshot) and `oadtd-validate.timer`. The service
+  reads a least-privilege token via `--token-file /etc/oadtd/validation.token`
+  (make it readable by the `oadtd` user: `chown oadtd:oadtd`, `chmod 600`). A
+  detection regression makes the unit fail; attach an `OnFailure=` drop-in to
+  alert. Enable with `systemctl enable --now oadtd-validate.timer`.
+- **Long-lived monitor:** `oadtdctl validate --continuous --interval 1h
+  --webhook https://hooks.example/regress` re-runs the suite on an interval and
+  POSTs a JSON alert (`type: detection_regression`) to the webhook whenever a
+  detection stops holding.
+
+Create the least-privilege validation identity by adding an `ingestor` user to
+`policy.json` (`oadtdctl token-hash` produces the `token_sha256`), then restart
+the server so the new user loads. Store the raw token only in the root-readable
+`--token-file`.
 
 ## Audit Log
 

@@ -85,14 +85,17 @@ oadtdctl validate --url https://your-oadtd.example --token "$OATD_API_TOKEN"
 ```
 
 It runs a curated library of **benign, MITRE ATT&CK-mapped** agent tool-call
-emulations (secret access T1552.001, discovery T1057, prompt-injection T1059,
-obfuscated payloads T1027, unapproved egress T1567, deception/canary T1530,
+emulations (secret access T1552.001, process discovery T1057, file discovery
+T1083, prompt-injection T1059, obfuscated payloads T1027, runtime decode T1140,
+web C2 T1071.001, unapproved egress T1567, deception/canary T1530,
 unapproved-tool TA0002) through the read-only `/api/gateway/decide` path and
 prints a pass/fail scorecard, including a benign baseline to catch false
 positives. It emits **only synthetic descriptive telemetry** — no real commands,
 exploits, or attack payloads are ever executed against any target. Use it after
-upgrades or policy changes as a detection regression check. A non-zero exit means
-an expected verdict did not hold.
+upgrades or policy changes as a detection regression check; a non-zero exit means
+an expected verdict did not hold. `--coverage` prints an ATT&CK coverage map, and
+`--continuous --webhook <url>` runs it as a scheduled monitor that alerts on
+regression (see [docs/operations.md](docs/operations.md)).
 
 ## Security model and hardening
 
