@@ -268,6 +268,37 @@ go run ./cmd/oadtdctl agent --source windows-eventlog --log-name Microsoft-Windo
 go run ./cmd/oadtdctl agent --source journald --journal-unit ssh.service --url http://localhost:8080
 ```
 
+## Detection Validation
+
+`oadtdctl validate` checks that the inline gateway still enforces against
+realistic agent threat patterns on your own authorized deployment. It runs a
+curated library of benign, MITRE ATT&CK-mapped tool-call emulations through the
+read-only `/api/gateway/decide` endpoint and scores each against its expected
+verdict, plus a benign baseline to catch false positives.
+
+```powershell
+go run ./cmd/oadtdctl validate --url http://localhost:8080 --token $env:OATD_API_TOKEN
+```
+
+The emulations carry only synthetic descriptive strings — no real commands,
+exploits, or attack payloads run against any target. Run it after upgrades or
+policy changes; it exits non-zero if an expected verdict did not hold, so it can
+gate a deploy. Add `--json` for machine-readable output in CI. Sample run:
+
+```text
+oadtdctl validate — agent-gateway detection validation
+  PASS  -            benign-baseline             want=allow                  got=allow
+  PASS  T1552.001    secret-in-context           want=>=require_approval     got=require_approval
+  PASS  T1057        discovery-chain             want=>=require_approval     got=require_approval
+  PASS  T1059        prompt-injection            want=>=require_approval     got=require_approval
+  PASS  T1027        obfuscated-secret           want=>=require_approval     got=require_approval
+  PASS  T1567        unapproved-egress           want=>=require_approval     got=require_approval
+  PASS  T1530        canary-touch                want=>=deny                 got=deny
+  PASS  TA0002       unapproved-tool             want=>=deny                 got=deny
+
+Summary: 8/8 held  (0 missed, 0 false positives)
+```
+
 ## Audit Log
 
 The service records audit events for authentication failures, RBAC denials,

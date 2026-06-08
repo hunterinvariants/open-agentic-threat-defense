@@ -41,6 +41,8 @@ malware behavior, or autonomous propagation. Demo data generates telemetry only.
   validation endpoint.
 - Per-asset investigation timeline endpoint.
 - `oadtdctl replay` for safe JSONL telemetry replay into the ingest API.
+- `oadtdctl validate` for authorized, benign detection validation — a library of
+  MITRE ATT&CK-mapped tool-call emulations scored against the inline gateway.
 - `oadtdctl agent` for long-running tail-based collection from supported
   defensive telemetry sources, including native Windows Event Log and Linux
   journald modes.
@@ -474,6 +476,20 @@ Run the wedge demo against a live server:
 ```powershell
 go run ./cmd/oadtdctl wedge-demo --url http://localhost:8080 --approved-by operator --await-approval
 ```
+
+Validate that the inline gateway enforces against realistic agent threat
+patterns on your own authorized deployment. `oadtdctl validate` runs a curated
+library of benign, MITRE ATT&CK-mapped tool-call emulations through the
+read-only `/api/gateway/decide` path and prints a pass/fail scorecard (including
+a benign baseline to catch false positives). It emits only synthetic descriptive
+telemetry — no real commands or exploit payloads are executed:
+
+```powershell
+go run ./cmd/oadtdctl validate --url http://localhost:8080 --token $env:OATD_API_TOKEN
+```
+
+Use it after upgrades or policy changes as a detection regression check; a
+non-zero exit means an expected verdict did not hold. Add `--json` for CI.
 
 Normalize external defensive logs to OATD JSONL:
 

@@ -2,9 +2,12 @@
 /oadtd
 /oadtd.exe
 /dist/
+/bin/
 
 # Local caches
 /.cache/
+/.gocache/
+/.gomodcache/
 
 # Editor and OS files
 .DS_Store

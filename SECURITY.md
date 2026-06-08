@@ -55,15 +55,44 @@ In scope:
   privilege escalation;
 - unsafe default behavior or secrets handling;
 - response actions that could exceed dry-run or configured permissions;
-- supply-chain weaknesses in the build/release/deploy workflows.
+- supply-chain weaknesses in the build/release/deploy workflows;
+- security best-practice gaps **with demonstrable impact** — i.e. a concrete way
+  the gap weakens a trust boundary, not a generic checklist item;
+- detection gaps: a realistic agent threat pattern the inline gateway fails to
+  flag or block. The benign emulation library shipped with `oadtdctl validate`
+  (see below) is the supported, authorized way to demonstrate these.
 
 Out of scope:
 
-- requests for offensive features or exploit development;
-- live-target testing without authorization;
+- requests for offensive features, exploit development, malware, or weaponized
+  payloads — this project is detection/enforcement only and will not build attack
+  tooling (see the non-goals in [docs/architecture.md](docs/architecture.md));
+- testing against systems you do not own or are not explicitly authorized to
+  test; validate against **your own deployment** (see "Validating your
+  deployment" below);
 - findings that require host/OS root or physical access (see the threat model);
 - the demo/stub tool backend, which is intentionally not a real execution path;
 - best-practice suggestions with no demonstrable security impact.
+
+## Validating your deployment
+
+You can validate that the inline gateway actually enforces against realistic
+agent threat patterns — on your own authorized deployment — with the built-in
+benign emulation suite:
+
+```bash
+oadtdctl validate --url https://your-oadtd.example --token "$OATD_API_TOKEN"
+```
+
+It runs a curated library of **benign, MITRE ATT&CK-mapped** agent tool-call
+emulations (secret access T1552.001, discovery T1057, prompt-injection T1059,
+obfuscated payloads T1027, unapproved egress T1567, deception/canary T1530,
+unapproved-tool TA0002) through the read-only `/api/gateway/decide` path and
+prints a pass/fail scorecard, including a benign baseline to catch false
+positives. It emits **only synthetic descriptive telemetry** — no real commands,
+exploits, or attack payloads are ever executed against any target. Use it after
+upgrades or policy changes as a detection regression check. A non-zero exit means
+an expected verdict did not hold.
 
 ## Security model and hardening
 
