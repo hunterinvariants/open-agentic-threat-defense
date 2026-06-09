@@ -1,0 +1,6 @@
+# oadtd_gateway.py needs nothing beyond the standard library.
+# The LangChain guard and the example agent need:
+langchain-core>=0.3
+# For a full LLM-driven agent (optional):
+# langchain>=0.3
+# langchain-openai>=0.2
