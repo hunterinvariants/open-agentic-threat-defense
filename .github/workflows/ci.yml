@@ -41,7 +41,8 @@ jobs:
           go-version: "1.25.11"
       - run: go mod download
       - run: go vet ./...
-      - run: go test ./...
+      - name: Test with race detector
+        run: go test -race ./...
       - name: Smoke test local startup
         shell: bash
         run: |

@@ -2,10 +2,20 @@ package policy
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/open-agentic-threat-defense/oadtd/internal/domain"
+)
+
+// Gateway call-history is keyed per session/run/actor and would otherwise grow
+// unbounded under real traffic. Cap the number of tracked keys and evict the
+// oldest in batches so memory stays bounded. Vars (not consts) so tests can
+// exercise the eviction with a small cap.
+var (
+	maxGatewayHistoryEntries = 50000
+	gatewayHistoryEvictBatch = 5000
 )
 
 type gatewayHistoryState struct {
@@ -67,6 +77,9 @@ func (e *Engine) recordGatewayHistory(request domain.ToolCallRequest, verdict do
 
 	state := e.history[key]
 	if state == nil {
+		if maxGatewayHistoryEntries > 0 && len(e.history) >= maxGatewayHistoryEntries {
+			e.evictOldestHistoryLocked(gatewayHistoryEvictBatch)
+		}
 		state = &gatewayHistoryState{}
 		e.history[key] = state
 	}
@@ -87,6 +100,30 @@ func (e *Engine) recordGatewayHistory(request domain.ToolCallRequest, verdict do
 	}
 	state.RecentFactors = appendHistoryValues(state.RecentFactors, factors, 8)
 	return state.snapshot(key)
+}
+
+// evictOldestHistoryLocked removes the n entries with the oldest LastSeen. The
+// caller must hold historyMu. The sort runs only when the cap is exceeded (once
+// per eviction batch), so the cost is amortized across many inserts.
+func (e *Engine) evictOldestHistoryLocked(n int) {
+	if n <= 0 || len(e.history) == 0 {
+		return
+	}
+	type entry struct {
+		key      string
+		lastSeen time.Time
+	}
+	entries := make([]entry, 0, len(e.history))
+	for k, s := range e.history {
+		entries = append(entries, entry{k, s.LastSeen})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].lastSeen.Before(entries[j].lastSeen) })
+	if n > len(entries) {
+		n = len(entries)
+	}
+	for i := 0; i < n; i++ {
+		delete(e.history, entries[i].key)
+	}
 }
 
 func (s *gatewayHistoryState) snapshot(key string) gatewayHistorySnapshot {
