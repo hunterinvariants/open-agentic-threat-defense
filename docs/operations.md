@@ -437,6 +437,27 @@ sub-100µs (see `go test -bench BenchmarkGateToolCall ./internal/policy`); the
 end-to-end figure is dominated by the HTTP round-trip, so run it on the target
 host (loopback latency on some platforms inflates the number).
 
+## Load and HA verification
+
+The in-process behaviour under load is covered by tests run under the race
+detector in CI: concurrent decisions stay correct, the backpressure semaphore
+sheds excess load with 429 without leaking slots, and the store is safe under
+concurrent access. To validate a real deployment end-to-end:
+
+- **Load / latency:** run `oadtdctl bench` against the target with rising
+  `--concurrency` until p99 or the error rate degrades; that is the host's
+  sustainable rate. Backpressure (`--gateway-max-in-flight`, default 64) caps
+  in-flight critical operations and returns 429 beyond it.
+- **Multi-instance HA:** run two or more instances behind a load balancer against
+  a shared Postgres, with `--public-url` / `--instance-name` set per instance.
+  `scripts/ha-rollout.sh` does a readiness-gated rolling restart and
+  `scripts/ha-check.sh` probes `/readyz`; drain one instance and confirm the
+  other serves uninterrupted (see [ha.md](ha.md)).
+- **Database-outage drill:** with a Postgres backend, stop the database and
+  confirm the server returns clean errors (no crash) and recovers when the
+  database returns. A malformed/unreachable DSN fails fast at startup rather than
+  hanging.
+
 ## Audit Log
 
 The service records audit events for authentication failures, RBAC denials,
