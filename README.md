@@ -19,7 +19,7 @@ malware behavior, or autonomous propagation. Demo data generates telemetry only.
   threat-pack content.
 - Tool-provenance verification: when a signed tool fingerprint is declared for a
   tool, the gateway denies a provenance mismatch (spoofed/tampered tool) and
-  gates a missing fingerprint — supply-chain control for agent tools.
+  gates a missing fingerprint - supply-chain control for agent tools.
 - Agent-identity verification: registered agents present a signed identity token;
   the gateway denies impersonation (token mismatch) and gates unknown or
   unidentified agents, so tool calls are attributed to a verified agent rather
